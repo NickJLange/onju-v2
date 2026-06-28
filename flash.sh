@@ -59,6 +59,30 @@ ensure_image() {
     fi
 }
 
+# Sets DEVICE_ARGS and CONTAINER_PORT for upload/monitor. $1 = explicit port or "".
+detect_device() {
+    local explicit="$1" dev=""
+    if [ -n "$explicit" ]; then
+        dev="$explicit"
+    elif [ "$FLASH_OS" = "darwin" ]; then
+        for g in /dev/cu.usbserial-* /dev/cu.usbmodem*; do
+            [ -e "$g" ] && { dev="$g"; break; }
+        done
+    else
+        for g in /dev/serial/by-id/* /dev/ttyUSB* /dev/ttyACM*; do
+            [ -e "$g" ] && { dev="$g"; break; }
+        done
+    fi
+    [ -n "$dev" ] || { echo "ERROR: no serial device found (pass one explicitly)"; exit 1; }
+    CONTAINER_PORT="$dev"
+    if [ "$FLASH_RUNTIME" = "container" ]; then
+        DEVICE_ARGS="--device ${dev}:${dev} --group-add keep-groups"
+    else
+        DEVICE_ARGS=""
+    fi
+    echo "Using device: $dev"
+}
+
 # run_toolchain <action> [container_port]
 # Container port is the device path AS SEEN IN THE CONTAINER (set by Task 4).
 run_toolchain() {
@@ -215,10 +239,9 @@ if [ "$COMPILE_ONLY" = true ]; then
     exit 0
 fi
 
-# CONTAINER_PORT/DEVICE_ARGS are populated by detect_device "$PORT" in the
-# device-mapping task; empty here (compile needs no device).
 DEVICE_ARGS=""
 CONTAINER_PORT=""
+detect_device "$PORT"
 
 echo ""
 echo "Flashing $TARGET..."
