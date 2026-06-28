@@ -42,15 +42,54 @@ OUTPUT="$PROJECT_DIR/credentials.h"
 BUILD_DIR="$PROJECT_DIR/build"
 
 # -------------------------------------------------------
-# Ensure dependencies
+# Toolchain runtime: container (default) or native
 # -------------------------------------------------------
-REQUIRED_LIBS=("Adafruit NeoPixel" "esp32_opus")
-for lib in "${REQUIRED_LIBS[@]}"; do
-    if ! arduino-cli lib list 2>/dev/null | grep -q "$lib"; then
-        echo "Installing missing library: $lib"
-        arduino-cli lib install "$lib"
+FLASH_RUNTIME="${FLASH_RUNTIME:-container}"
+FLASH_IMAGE="${FLASH_IMAGE:-onju-flasher}"
+FLASH_DRYRUN="${FLASH_DRYRUN:-0}"
+
+ensure_image() {
+    [ "$FLASH_RUNTIME" = "container" ] || return 0
+    if ! podman ${PODMAN_CONNECTION:+--connection "$PODMAN_CONNECTION"} \
+            image exists "$FLASH_IMAGE" 2>/dev/null; then
+        echo "Building $FLASH_IMAGE (first run)..."
+        podman ${PODMAN_CONNECTION:+--connection "$PODMAN_CONNECTION"} \
+            build -t "$FLASH_IMAGE" "$REPO/docker/flash"
     fi
-done
+}
+
+# run_toolchain <action> [container_port]
+# Container port is the device path AS SEEN IN THE CONTAINER (set by Task 4).
+run_toolchain() {
+    local action="$1" cport="${2:-}"
+    if [ "$FLASH_RUNTIME" = "native" ]; then
+        "$REPO/docker/flash/entrypoint.sh" "$TARGET" "$action" "$cport"
+        return
+    fi
+    local tty=""; [ -t 0 ] && tty="-it"
+    # DEVICE_ARGS is populated by Task 4 for upload/monitor; empty for compile.
+    local cmd=(podman)
+    [ -n "${PODMAN_CONNECTION:-}" ] && cmd+=(--connection "$PODMAN_CONNECTION")
+    cmd+=(run --rm $tty -v "$REPO:/work" ${DEVICE_ARGS:-} "$FLASH_IMAGE" "$TARGET" "$action" "$cport")
+    if [ "$FLASH_DRYRUN" = "1" ]; then
+        printf '%s ' "${cmd[@]}"; printf '\n'
+        return 0
+    fi
+    "${cmd[@]}"
+}
+
+# -------------------------------------------------------
+# Ensure dependencies (native mode only; container carries its own toolchain)
+# -------------------------------------------------------
+if [ "$FLASH_RUNTIME" = "native" ]; then
+    REQUIRED_LIBS=("Adafruit NeoPixel" "esp32_opus")
+    for lib in "${REQUIRED_LIBS[@]}"; do
+        if ! arduino-cli lib list 2>/dev/null | grep -q "$lib"; then
+            echo "Installing missing library: $lib"
+            arduino-cli lib install "$lib"
+        fi
+    done
+fi
 
 # -------------------------------------------------------
 # Flags
@@ -89,6 +128,7 @@ echo "Target: $TARGET"
 # -------------------------------------------------------
 # Generate credentials.h (only if missing or --regen)
 # -------------------------------------------------------
+if [ "${FLASH_SKIP_CREDS:-0}" != "1" ]; then
 if [ -f "$OUTPUT" ] && [ "$REGEN" = false ]; then
     echo "Using existing credentials.h (pass --regen to regenerate)"
 else
@@ -138,6 +178,7 @@ else
         "$TEMPLATE" > "$OUTPUT"
     echo "Generated credentials.h"
 fi
+fi  # FLASH_SKIP_CREDS
 echo ""
 
 # -------------------------------------------------------
@@ -152,81 +193,25 @@ if [ ! -f "$GIT_HASH_FILE" ] || [ "$(cat "$GIT_HASH_FILE")" != "$NEW_CONTENT" ];
 fi
 
 # -------------------------------------------------------
-# Check if compile is needed
+# Ensure image, then dispatch the requested action
 # -------------------------------------------------------
-NEEDS_COMPILE=true
-if [ "$FORCE_COMPILE" = false ] && [ -d "$BUILD_DIR" ]; then
-    BIN=$(find "$BUILD_DIR" -name "*.ino.bin" -maxdepth 1 2>/dev/null | head -1)
-    if [ -n "$BIN" ]; then
-        NEWER=$(find "$PROJECT_DIR" -maxdepth 1 \( -name "*.ino" -o -name "*.h" \) -newer "$BIN" 2>/dev/null | head -1)
-        [ -z "$NEWER" ] && NEEDS_COMPILE=false
-    fi
-fi
-
-# -------------------------------------------------------
-# Compile
-# -------------------------------------------------------
-compile_firmware() {
-    if [ "$NEEDS_COMPILE" = true ]; then
-        echo "Compiling..."
-        cd "$PROJECT_DIR"
-        arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "$INO_NAME" || exit 1
-        echo "Compilation successful!"
-    else
-        echo "No source changes, skipping compile"
-    fi
-}
+ensure_image
 
 if [ "$COMPILE_ONLY" = true ]; then
-    echo "Compile-only mode (no upload)"
-    compile_firmware
+    echo "Compile-only mode"
+    run_toolchain compile
     exit 0
 fi
 
-compile_firmware
-
-# -------------------------------------------------------
-# Detect port
-# -------------------------------------------------------
-if [ -z "$PORT" ]; then
-    for glob in "${PORT_GLOBS[@]}"; do
-        PORT=$(ls $glob 2>/dev/null | head -n 1 || true)
-        [ -n "$PORT" ] && break
-    done
-    if [ -z "$PORT" ]; then
-        echo "Error: No USB serial port found"
-        exit 1
-    fi
-    echo "Auto-detected port: $PORT"
-fi
+# DEVICE_ARGS + CONTAINER_PORT are set by detect_device (Task 4). For now, no device.
+DEVICE_ARGS=""
+CONTAINER_PORT=""
 
 echo ""
-echo "Flashing $TARGET to $PORT..."
+echo "Flashing $TARGET..."
+run_toolchain flash "$CONTAINER_PORT"
 
-pkill -f "serial_monitor" 2>/dev/null || true
-pkill -f "python.*serial" 2>/dev/null || true
-sleep 1
-
-echo "Uploading..."
-cd "$PROJECT_DIR"
-arduino-cli upload --fqbn "$FQBN" --port "$PORT" --input-dir "$BUILD_DIR" "$INO_NAME"
-
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "Upload successful!"
-    if [ "$NO_MONITOR" = true ]; then
-        exit 0
-    fi
+if [ "$NO_MONITOR" != true ]; then
     echo "Starting serial monitor..."
-    sleep 2
-    if [ -f "$REPO/serial_monitor.py" ]; then
-        python3 "$REPO/serial_monitor.py" "$PORT"
-    else
-        arduino-cli monitor -p "$PORT" -c baudrate=115200
-    fi
-else
-    echo ""
-    echo "Upload failed"
-    echo "Try: hold BOOT button, press RESET, release BOOT, then run again"
-    exit 1
+    run_toolchain monitor "$CONTAINER_PORT"
 fi
