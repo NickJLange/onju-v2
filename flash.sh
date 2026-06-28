@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+FLASH_OS="${FLASH_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"  # darwin | linux
 
 # -------------------------------------------------------
 # Target config
@@ -132,47 +133,58 @@ if [ "${FLASH_SKIP_CREDS:-0}" != "1" ]; then
 if [ -f "$OUTPUT" ] && [ "$REGEN" = false ]; then
     echo "Using existing credentials.h (pass --regen to regenerate)"
 else
-    WIFI_SSID=""
+    WIFI_SSID="${WIFI_SSID:-}"
+    WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 
-    WIFI_IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
-    WIFI_IF="${WIFI_IF:-en0}"
+    if [ "$FLASH_OS" = "darwin" ]; then
+        # ---- macOS Keychain + networksetup discovery ----
+        WIFI_IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
+        WIFI_IF="${WIFI_IF:-en0}"
 
-    WIFI_SSID=$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
-    if [ -z "$WIFI_SSID" ] || [[ "$WIFI_SSID" == *"not associated"* ]] || [[ "$WIFI_SSID" == *"not a Wi-Fi"* ]] || [[ "$WIFI_SSID" == *"Error"* ]]; then
-        WIFI_SSID=""
-    fi
+        _SSID_RAW=$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
+        if [ -z "$_SSID_RAW" ] || [[ "$_SSID_RAW" == *"not associated"* ]] || [[ "$_SSID_RAW" == *"not a Wi-Fi"* ]] || [[ "$_SSID_RAW" == *"Error"* ]]; then
+            _SSID_RAW=""
+        fi
+        [ -n "$_SSID_RAW" ] && WIFI_SSID="${WIFI_SSID:-$_SSID_RAW}"
 
-    if [ -z "$WIFI_SSID" ]; then
-        PREFERRED=$(networksetup -listpreferredwirelessnetworks "$WIFI_IF" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
-        if [ -n "$PREFERRED" ]; then
-            TOP_SSID=$(echo "$PREFERRED" | head -1)
-            echo "Known WiFi networks:"
-            NETWORK_LIST=$(echo "$PREFERRED" | head -5)
-            echo "$NETWORK_LIST" | cat -n
-            NUM_NETWORKS=$(echo "$NETWORK_LIST" | wc -l | tr -d ' ')
-            echo ""
-            read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
-            if [ -z "$WIFI_SSID" ]; then
-                WIFI_SSID="$TOP_SSID"
-            elif [[ "$WIFI_SSID" =~ ^[0-9]+$ ]] && [ "$WIFI_SSID" -ge 1 ] && [ "$WIFI_SSID" -le "$NUM_NETWORKS" ]; then
-                WIFI_SSID=$(echo "$NETWORK_LIST" | sed -n "${WIFI_SSID}p")
+        if [ -z "$WIFI_SSID" ]; then
+            PREFERRED=$(networksetup -listpreferredwirelessnetworks "$WIFI_IF" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+            if [ -n "$PREFERRED" ]; then
+                TOP_SSID=$(echo "$PREFERRED" | head -1)
+                echo "Known WiFi networks:"
+                NETWORK_LIST=$(echo "$PREFERRED" | head -5)
+                echo "$NETWORK_LIST" | cat -n
+                NUM_NETWORKS=$(echo "$NETWORK_LIST" | wc -l | tr -d ' ')
+                echo ""
+                read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
+                if [ -z "$WIFI_SSID" ]; then
+                    WIFI_SSID="$TOP_SSID"
+                elif [[ "$WIFI_SSID" =~ ^[0-9]+$ ]] && [ "$WIFI_SSID" -ge 1 ] && [ "$WIFI_SSID" -le "$NUM_NETWORKS" ]; then
+                    WIFI_SSID=$(echo "$NETWORK_LIST" | sed -n "${WIFI_SSID}p")
+                fi
+            fi
+        fi
+
+        if [ -z "$WIFI_PASSWORD" ]; then
+            echo "Retrieving WiFi password from Keychain (Touch ID may be required)..."
+            WIFI_PASSWORD=$(security find-generic-password -wa "$WIFI_SSID" 2>/dev/null || true)
+            if [ -z "$WIFI_PASSWORD" ]; then
+                echo "Could not retrieve password for '$WIFI_SSID' from Keychain."
+                read -sp "WiFi password: " WIFI_PASSWORD
+                echo ""
             fi
         fi
     fi
 
-    [ -z "$WIFI_SSID" ] && read -p "WiFi SSID: " WIFI_SSID
-    [ -z "$WIFI_SSID" ] && { echo "ERROR: No WiFi SSID provided."; exit 1; }
-    echo "WiFi SSID: $WIFI_SSID"
-
-    echo "Retrieving WiFi password from Keychain (Touch ID may be required)..."
-    WIFI_PASSWORD=$(security find-generic-password -wa "$WIFI_SSID" 2>/dev/null || true)
-    if [ -z "$WIFI_PASSWORD" ]; then
-        echo "Could not retrieve password for '$WIFI_SSID' from Keychain."
-        read -sp "WiFi password: " WIFI_PASSWORD
-        echo ""
+    # ---- cross-platform fallback / Linux path ----
+    [ -z "$WIFI_SSID" ] && [ -t 0 ] && read -rp "WiFi SSID: " WIFI_SSID
+    [ -z "$WIFI_SSID" ] && { echo "ERROR: No WiFi SSID (set WIFI_SSID)"; exit 1; }
+    if [ -z "$WIFI_PASSWORD" ] && [ -t 0 ]; then
+        read -rsp "WiFi password: " WIFI_PASSWORD; echo ""
     fi
-    [ -z "$WIFI_PASSWORD" ] && { echo "ERROR: No WiFi password provided."; exit 1; }
+    [ -z "$WIFI_PASSWORD" ] && { echo "ERROR: No WiFi password (set WIFI_PASSWORD)"; exit 1; }
 
+    echo "WiFi SSID: $WIFI_SSID"
     sed -e "s|{{WIFI_SSID}}|${WIFI_SSID}|g" \
         -e "s|{{WIFI_PASSWORD}}|${WIFI_PASSWORD}|g" \
         "$TEMPLATE" > "$OUTPUT"
