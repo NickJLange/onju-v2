@@ -291,12 +291,12 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                     except Exception:
                         pass
 
-            # Stall decision (agentic mode only; blocking, capped by config timeout).
+            # Stall decision (hermes backend only; blocking, capped by config timeout).
             # Passes the previous exchange so the classifier can recognize
             # continuations ("go on") and prefaces ("one more thing") as
             # conversational rather than tool-needing.
             stall_text: str | None = None
-            if config["conversation"].get("backend") == "agentic":
+            if config["conversation"].get("backend") == "hermes":
                 stall_text = await stall_mod.decide_stall(
                     text,
                     config,
@@ -310,7 +310,7 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                     log.info(f"STALL [+{stall_decided_at:.2f}s] NONE")
             device.last_user_text = text
 
-            # Fire stall TTS+send in parallel with OpenClaw warming up.
+            # Fire stall TTS+send in parallel with the agent warming up.
             stall_task: asyncio.Task | None = None
             extra_context: str | None = None
             if stall_text:
@@ -337,7 +337,7 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                         log.debug(f"LLM  sentence: {sentence}")
 
                     # Make sure the stall audio has finished sending before we
-                    # start pushing OpenClaw content to the device.
+                    # start pushing agent content to the device.
                     if stall_task is not None and not stall_task.done():
                         await stall_task
                         stall_task = None
@@ -377,7 +377,7 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                     await reopen_mic_if_needed()
                     continue
             elif sent_partial:
-                # The stall played but OpenClaw returned nothing — reopen mic.
+                # The stall played but the agent returned nothing — reopen mic.
                 if not device.ptt:
                     await send_audio(device.ip, tcp_port, b"",
                                      mic_timeout=dev_cfg["default_mic_timeout"],
@@ -516,10 +516,9 @@ def _log_startup_summary(config: dict) -> None:
     log.info("Pipeline server starting")
     log.info(f"  ASR   {config['asr']['url']}")
 
-    if backend_name == "agentic":
-        model = backend_cfg.get("provider_model") or backend_cfg.get("model", "?")
-        log.info(f"  LLM   agentic: {model} @ {backend_cfg.get('base_url', '?')} "
-                 f"(channel={backend_cfg.get('message_channel', '?')})")
+    if backend_name == "hermes":
+        model = backend_cfg.get("model", "hermes-agent")
+        log.info(f"  LLM   hermes: {model} @ {backend_cfg.get('base_url', '?')}")
         stall_cfg = conv_cfg.get("stall", {})
         if stall_cfg.get("enabled"):
             log.info(f"  STALL {stall_cfg.get('model', '?')} @ {stall_cfg.get('base_url', '?')} "

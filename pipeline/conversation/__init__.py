@@ -3,12 +3,12 @@ from typing import AsyncIterator
 
 from pipeline.conversation.base import ConversationBackend
 from pipeline.conversation.conversational import ConversationalBackend
-from pipeline.conversation.agentic import AgenticBackend
+from pipeline.conversation.hermes import HermesBackend
 
 # Primary: punctuation followed by whitespace (safe, standard).
 _SENTENCE_END = re.compile(r"[.!?\n]+\s+")
 # Fallback: punctuation with no space, but only when preceded by a lowercase
-# letter and followed by uppercase.  Catches OpenClaw's chunk-boundary joins
+# letter and followed by uppercase.  Catches agent chunk-boundary joins
 # ("now.The") without breaking abbreviations like "U.S." (uppercase before dot).
 _SENTENCE_END_NOSPACE = re.compile(r"(?<=[a-z])[.!?]+(?=[A-Z])")
 
@@ -41,7 +41,7 @@ def create_backend(config: dict, device_id: str) -> ConversationBackend:
 
     if backend == "conversational":
         return ConversationalBackend(conv_cfg["conversational"], device_id)
-    elif backend == "agentic":
-        return AgenticBackend(conv_cfg["agentic"], device_id)
+    elif backend == "hermes":
+        return HermesBackend(conv_cfg["hermes"], device_id)
     else:
         raise ValueError(f"Unknown conversation backend: {backend}")

@@ -129,8 +129,8 @@ async def main():
 
     original_timeout = config["conversation"]["stall"].get("timeout", 1.5)
     config["conversation"]["stall"]["timeout"] = 30.0
-    # Force agentic mode so decide_stall runs even if config is set to conversational.
-    config["conversation"]["backend"] = "agentic"
+    # Force the hermes backend so decide_stall runs even if config is set to conversational.
+    config["conversation"]["backend"] = "hermes"
 
     print(f"{BOLD}model:{RESET}    {config['conversation']['stall']['model']}")
     print(f"{BOLD}endpoint:{RESET} {config['conversation']['stall']['base_url']}")

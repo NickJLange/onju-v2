@@ -1,10 +1,13 @@
-# Onju Voice v2 (OnjuClaw) 🍐🦞
+# Onju Voice v2 (Onju × Hermes) 🍐☤
 
 Enable multiple "Google Home" speakers to connect to your Mac Mini for talking to your agent(s).
 
 This repo consists of:
-* An async server pipeline handling ASR -> TTS from multiple devices using any LLM or agent platforms like OpenClaw 🦞
+* An async server pipeline handling ASR -> TTS from multiple devices using any LLM or agent platforms like [hermes-agent](https://github.com/NickJLange/hermes-agent) ☤
 * Hardware designs for a drop-in replacement PCB to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity ([order link](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html))
+
+> **New to the M5 device?** Start with [docs/m5-getting-started.md](docs/m5-getting-started.md).
+> Running the secure Hermes agent backend? See [docs/hermes-secure-setup.md](docs/hermes-secure-setup.md).
 
 > This is an upgraded version of [onju-voice](https://github.com/justLV/onju-voice) as DEMO'd [here](https://x.com/justLV/status/1681377298308820992?s=20)!.
 
@@ -12,7 +15,7 @@ This repo consists of:
 
 ## What's new in v2
 
-* **Agentic backend** 🦞 -- delegate conversation history, session management, and tool execution to an [OpenClaw](https://github.com/openclaw) gateway for centralized, multi-device orchestration
+* **Agentic backend** ☤ -- delegate conversation history, session management, and tool execution to a [hermes-agent](https://github.com/NickJLange/hermes-agent) API server for centralized, multi-device orchestration — with a **restricted toolset** so the voice channel can't reach the host shell
 * **Opus compression** -- 14-16x downstream compression (server to speaker) for better audio quality over WiFi
 * **Streaming-ready architecture** -- designed for sentence-level TTS streaming and agentic tool-calling loops
 * **Modular async pipeline** -- replaced the monolithic server with a pluggable architecture for ASR, LLM, and TTS backends etc.
@@ -87,32 +90,40 @@ The pipeline supports two conversation backends, selectable via `config.yaml`:
 
 **Conversational** (`conversation.backend: "conversational"`): Plain chat-completions backend. Manages conversation history client-side with per-device JSON persistence and sends the full message history on each LLM request. Works with any OpenAI-compatible endpoint (OpenRouter, Gemini, Ollama, mlx_lm.server, etc.). Good for simple voice chat with no tool use.
 
-**Agentic** (`conversation.backend: "agentic"`): Delegates session management and tool execution to a remote agent gateway like [OpenClaw](https://github.com/openclaw). Only sends the latest user message — the gateway tracks history server-side using the device ID as the session key, and runs its own tool loop (web search, file access, multi-step work). Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
+**Hermes** (`conversation.backend: "hermes"`): Delegates session management and tool execution to a [hermes-agent](https://github.com/NickJLange/hermes-agent) API server. Only sends the latest user message — Hermes tracks history server-side, scoped per device via the `X-Hermes-Session-Key` header (each speaker gets its own stable long-term memory), and runs its own tool loop. Set `HERMES_API_SERVER_KEY` in your environment and point `base_url` at the API server. **Run this with a restricted toolset** — see Security below.
 
-### Setting up OpenClaw
+### Setting up Hermes
 
-If you have [OpenClaw](https://github.com/openclaw) installed, a setup script is included:
+With [hermes-agent](https://github.com/NickJLange/hermes-agent) installed, a setup script is included:
 
 ```bash
-./setup_openclaw.sh
+./setup_hermes.sh
 ```
 
-This will:
-1. Enable the chat completions HTTP endpoint on the gateway
-2. Append a voice mode prompt to `~/.openclaw/workspace/AGENTS.md` (tells the agent to respond in concise, speech-friendly prose when the message channel is `onju-voice`)
-3. Restart the gateway
+This enables the API server on loopback with a generated bearer key, and prints the
+**restricted-toolset** config to apply so the voice channel can't reach the host
+terminal. Then set `conversation.backend: "hermes"` in `pipeline/config.yaml`,
+export the printed `HERMES_API_SERVER_KEY`, and point `hermes.base_url` at the
+server. Full secure-deployment recipe (toolset restriction, verification, and
+TLS/tunnel for a remote host): [docs/hermes-secure-setup.md](docs/hermes-secure-setup.md).
 
-Then set `conversation.backend: "agentic"` in `pipeline/config.yaml` and ensure `OPENCLAW_GATEWAY_TOKEN` is set in your environment.
+### Security
 
-### Streaming and stalls w/ OpenClaw
+Hermes' API server exposes the agent's **full toolset, including the host terminal**,
+and a transcribed voice request can't answer an approval prompt. The fork's security
+model is **capability restriction first**: lock the `api_server` platform to a safe,
+read-only toolset (`safe`, `memory`, `skills`, `session_search` — no terminal, file
+write, or code execution) via `platform_toolsets.api_server`, with `approvals.mode:
+smart` as defense in depth. This narrows only the voice channel — your Hermes CLI and
+messaging platforms keep full tools. See [docs/hermes-secure-setup.md](docs/hermes-secure-setup.md).
 
-Agentic requests can take 5-60+ seconds while the gateway runs tools, so the pipeline is built to make that wait feel responsive.
+### Streaming and stalls
 
-**Sentence-level streaming.** The agent's SSE response is consumed delta by delta. A splitter (`pipeline/conversation/__init__.py:sentence_chunks`) buffers text until it hits a sentence boundary, then hands the sentence to TTS and pushes the audio to the device. Any narration the agent emits between tool calls gets spoken aloud as it arrives, while the next tool runs in the background. Intermediate sends use `mic_timeout=0` so the mic only reopens after the final chunk.
+Agentic requests can take 5-60+ seconds while the agent runs tools, so the pipeline is built to make that wait feel responsive.
+
+**Sentence-level streaming.** Hermes' SSE response is consumed delta by delta directly over httpx, so the custom `hermes.tool.progress` events Hermes interleaves with content are filtered out of the spoken text (`pipeline/conversation/hermes.py`). A splitter (`pipeline/conversation/__init__.py:sentence_chunks`) buffers text until it hits a sentence boundary, then hands the sentence to TTS and pushes the audio to the device. Any narration the agent emits between tool calls gets spoken aloud as it arrives, while the next tool runs in the background. Intermediate sends use `mic_timeout=0` so the mic only reopens after the final chunk.
 
 **Contextual stall phrases.** Before the main agent call, the pipeline fires a fast classifier that decides whether the question needs a brief spoken acknowledgment. Conversational questions return `NONE` and get no stall. Tool-needing questions get a short personality-matched phrase that plays within about a second while the agent works. The stall text is then injected back into the agent's user message as a parenthetical continuity note so it doesn't repeat itself. Configure in `conversation.stall`.
-
-**The first-turn caveat with OpenClaw.** OpenClaw's OpenAI-compatible endpoint buffers all content from the first agent turn until the first round of tool execution completes. If the model generates an opening sentence and then calls a tool, that sentence is held server-side until the tool finishes. Narration between *subsequent* tool rounds streams fine. This is why the stall classifier exists: it gives the user a fast spoken acknowledgment that bypasses the gateway's first-turn buffering. See `pipeline/conversation/stall.py`.
 
 ## Installation
 
@@ -207,10 +218,10 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 | Section | What it controls |
 |---|---|
 | `asr` | Speech-to-text service URL |
-| `conversation.backend` | `"conversational"` (plain chat) or `"agentic"` (OpenClaw, tools) |
+| `conversation.backend` | `"conversational"` (plain chat) or `"hermes"` (hermes-agent, tools) |
 | `conversation.conversational` | LLM endpoint, model, system prompt, message history |
-| `conversation.agentic` | OpenClaw gateway URL, auth token, message channel |
-| `conversation.stall` | Fast classifier that decides if the agentic backend needs a brief spoken stall |
+| `conversation.hermes` | Hermes API server URL, bearer token, per-device session key |
+| `conversation.stall` | Fast classifier that decides if the hermes backend needs a brief spoken stall |
 | `tts` | TTS backend (`"elevenlabs"` or `"local"`), voice settings |
 | `vad` | Voice activity detection thresholds and timing |
 | `network` | UDP/TCP/multicast ports |
@@ -223,7 +234,7 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 | `OPENROUTER_API_KEY` | Conversational backend via OpenRouter |
 | `GEMINI_API_KEY` | Conversational backend via Gemini, and the stall classifier |
 | `ANTHROPIC_API_KEY` | Conversational backend via Anthropic API directly |
-| `OPENCLAW_GATEWAY_TOKEN` | Agentic (OpenClaw) backend |
+| `HERMES_API_SERVER_KEY` | Hermes backend (bearer token; `API_SERVER_KEY` on the Hermes side) |
 
 ## Testing
 
@@ -240,10 +251,13 @@ python tests/test_speaker.py <device-ip>
 # Test mic input (receive and record UDP audio)
 python tests/test_mic.py --duration 10
 
+# Unit-check the Hermes backend (SSE parsing, headers, sessions) — no server needed
+python tests/test_hermes_backend.py
+
 # Benchmark the stall classifier against the configured Gemini endpoint
 python tests/test_stall.py
 
-# Inspect raw SSE chunk shapes from the configured agentic gateway
+# Inspect raw SSE event shapes from the configured Hermes API server
 python tests/test_stream.py
 python tests/test_stream.py "your prompt here"
 
