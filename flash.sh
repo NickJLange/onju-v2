@@ -70,6 +70,9 @@ run_toolchain() {
     # DEVICE_ARGS is populated by Task 4 for upload/monitor; empty for compile.
     local cmd=(podman)
     [ -n "${PODMAN_CONNECTION:-}" ] && cmd+=(--connection "$PODMAN_CONNECTION")
+    # ${DEVICE_ARGS:-} is intentionally word-split (unquoted) so it can expand to
+    # multiple podman args. The device-mapping task must keep device paths
+    # space-free (or switch DEVICE_ARGS to an array) to avoid breakage here.
     cmd+=(run --rm $tty -v "$REPO:/work" ${DEVICE_ARGS:-} "$FLASH_IMAGE" "$TARGET" "$action" "$cport")
     if [ "$FLASH_DRYRUN" = "1" ]; then
         printf '%s ' "${cmd[@]}"; printf '\n'
@@ -96,15 +99,13 @@ fi
 # -------------------------------------------------------
 COMPILE_ONLY=false
 REGEN=false
-FORCE_COMPILE=false
 NO_MONITOR=false
 PORT=""
 
 for arg in "$@"; do
     case "$arg" in
         compile|compile-only) COMPILE_ONLY=true ;;
-        --regen) REGEN=true; FORCE_COMPILE=true ;;
-        --force) FORCE_COMPILE=true ;;
+        --regen) REGEN=true ;;
         --no-monitor) NO_MONITOR=true ;;
         -h|--help)
             echo "Usage: flash.sh [target] [options] [port]"
@@ -114,7 +115,6 @@ for arg in "$@"; do
             echo "Options:"
             echo "  compile          Compile only, no upload"
             echo "  --regen          Force regenerate WiFi credentials"
-            echo "  --force          Force recompile even if unchanged"
             echo "  --no-monitor     Skip serial monitor after flash"
             echo "  /dev/...         Upload to specific port"
             exit 0 ;;
@@ -203,7 +203,8 @@ if [ "$COMPILE_ONLY" = true ]; then
     exit 0
 fi
 
-# DEVICE_ARGS + CONTAINER_PORT are set by detect_device (Task 4). For now, no device.
+# CONTAINER_PORT/DEVICE_ARGS are populated by detect_device "$PORT" in the
+# device-mapping task; empty here (compile needs no device).
 DEVICE_ARGS=""
 CONTAINER_PORT=""
 
