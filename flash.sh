@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
-FLASH_OS="${FLASH_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"  # darwin | linux
+FLASH_OS="$(printf '%s' "${FLASH_OS:-$(uname -s)}" | tr '[:upper:]' '[:lower:]')"  # darwin | linux
 
 # -------------------------------------------------------
 # Target config
@@ -12,25 +12,16 @@ shift 2>/dev/null || true
 
 case "$TARGET" in
     onjuino)
-        FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"
         PROJECT_DIR="$REPO/onjuino"
-        INO_NAME="onjuino.ino"
-        PORT_GLOBS=("/dev/cu.usbmodem*")
         ;;
     m5_echo|m5echo)
-        FQBN="esp32:esp32:m5stack_atom:UploadSpeed=1500000"
         PROJECT_DIR="$REPO/m5_echo"
-        INO_NAME="m5_echo.ino"
-        PORT_GLOBS=("/dev/cu.usbserial-*" "/dev/cu.usbmodem*")
         ;;
     --*|compile*)
         # No target specified, treat as flag — default to onjuino
         set -- "$TARGET" "$@"
         TARGET="onjuino"
-        FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"
         PROJECT_DIR="$REPO/onjuino"
-        INO_NAME="onjuino.ino"
-        PORT_GLOBS=("/dev/cu.usbmodem*")
         ;;
     *)
         echo "Unknown target: $TARGET (expected onjuino or m5_echo)"
@@ -40,7 +31,6 @@ esac
 
 TEMPLATE="$PROJECT_DIR/credentials.h.template"
 OUTPUT="$PROJECT_DIR/credentials.h"
-BUILD_DIR="$PROJECT_DIR/build"
 
 # -------------------------------------------------------
 # Toolchain runtime: container (default) or native

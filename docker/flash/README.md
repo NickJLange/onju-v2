@@ -106,7 +106,7 @@ groups                 # must include dialout or uucp
 
 ## macOS — optional QEMU upload appendix
 
-`compile` works on macOS via the default applehv/libkrun machine, but
+`compile` works on macOS via any running podman machine, but
 **uploading firmware requires USB pass-through**, which applehv and libkrun do
 not expose. The solution is a QEMU-backed machine with explicit USB vendor/
 product filtering.
