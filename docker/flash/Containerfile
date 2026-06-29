@@ -17,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
         | BINDIR=/usr/local/bin sh -s ${ARDUINO_CLI_VERSION}
 
+# Install the pinned core + libraries, then slim the image in the SAME layer:
+# both flash targets are xtensa (ESP32-PICO-D4, ESP32-S3), so the RISC-V toolchain,
+# the gdb debuggers, JTAG/openocd, and the arduino-cli archive cache are all dead
+# weight. Deleting them here (not a later layer) is what actually shrinks the image.
 RUN arduino-cli config init \
     && arduino-cli config set network.connection_timeout 600s \
     && arduino-cli config add board_manager.additional_urls \
@@ -24,7 +28,10 @@ RUN arduino-cli config init \
     && arduino-cli core update-index \
     && arduino-cli core install esp32:esp32@${ESP32_CORE_VERSION} \
     && arduino-cli lib install "Adafruit NeoPixel@${NEOPIXEL_VERSION}" \
-    && arduino-cli lib install "esp32_opus${ESP32_OPUS_VERSION:+@${ESP32_OPUS_VERSION}}"
+    && arduino-cli lib install "esp32_opus${ESP32_OPUS_VERSION:+@${ESP32_OPUS_VERSION}}" \
+    && _T=/opt/arduino/data/packages/esp32/tools \
+    && rm -rf "$_T/esp-rv32" "$_T/riscv32-esp-elf-gdb" "$_T/xtensa-esp-elf-gdb" "$_T/openocd-esp32" \
+    && rm -rf "${ARDUINO_DIRECTORIES_DOWNLOADS:?}"/*
 
 WORKDIR /work
 COPY entrypoint.sh /usr/local/bin/flash-entrypoint
