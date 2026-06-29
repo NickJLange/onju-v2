@@ -48,6 +48,22 @@ Useful variants:
 ./flash.sh m5_echo --no-monitor     # skip the serial monitor after upload
 ```
 
+### Flashing in a container (reproducible)
+
+By default `flash.sh` runs the toolchain (arduino-cli + the version-pinned ESP32
+core and libraries) inside a rootless **podman** container, so the host only needs
+podman — not a local arduino-cli. On first run it builds the image (`onju-flasher`)
+automatically, then compiles and flashes through it. `compile` works on any host
+including macOS; **uploading** from macOS needs USB pass-through via a dedicated
+QEMU podman machine (it's QEMU-only). The env knobs (`FLASH_RUNTIME`, `FLASH_IMAGE`,
+`FLASH_DRYRUN`, `PODMAN_CONNECTION`), the rootless Linux device mapping, and the
+macOS QEMU `flasher` setup are all in
+[docker/flash/README.md](../docker/flash/README.md).
+
+To run the toolchain **natively** instead (a host that already has arduino-cli),
+set `FLASH_RUNTIME=native` — that's the path the numbered steps above describe
+(host library install, macOS Keychain credentials, `/dev/cu.*` detection).
+
 **If upload fails** (`Error: ... / Upload failed`): hold the **BOOT** button,
 press **RESET**, release **BOOT**, then run the command again. The PICO-D4
 sometimes needs a manual bootloader entry.
