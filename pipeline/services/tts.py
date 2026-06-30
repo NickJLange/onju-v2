@@ -1,11 +1,16 @@
 import io
 import logging
 import os
+import re
 
 import httpx
 from pydub import AudioSegment
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_env(value: str) -> str:
+    return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
 
 
 async def synthesize(text: str, voice: str, config: dict) -> bytes:
@@ -20,7 +25,11 @@ async def synthesize(text: str, voice: str, config: dict) -> bytes:
 
 async def _elevenlabs(text: str, voice_name: str, config: dict) -> bytes:
     el_cfg = config["tts"]["elevenlabs"]
-    api_key = el_cfg["api_key"]
+    api_key = (
+        _resolve_env(el_cfg.get("api_key", ""))
+        or os.environ.get("ELEVEN_LABS_API_KEY")
+        or os.environ.get("ELEVENLABS_API_KEY", "")
+    )
     voice_id = el_cfg["voices"].get(voice_name, el_cfg["voices"].get(el_cfg["default_voice"]))
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
