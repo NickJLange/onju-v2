@@ -36,8 +36,12 @@ RUN pip3 install --break-system-packages fastapi uvicorn python-multipart
 
 # Build pywhispercpp with Vulkan support.
 # CMAKE_ARGS is read by pywhispercpp's setup.py and passed to the cmake build.
+# libwhisper.so lands in the Python dist-packages dir (not /usr/local/lib), so
+# we add a ldconfig entry so the runtime linker can find it.
 RUN CMAKE_ARGS="-DGGML_VULKAN=1" \
-    pip3 install --break-system-packages --no-binary pywhispercpp pywhispercpp
+    pip3 install --break-system-packages --no-binary pywhispercpp pywhispercpp \
+    && echo /usr/local/lib/python3.12/dist-packages > /etc/ld.so.conf.d/pywhispercpp.conf \
+    && ldconfig
 
 # ── App ─────────────────────────────────────────────────────────────────────
 WORKDIR /app
