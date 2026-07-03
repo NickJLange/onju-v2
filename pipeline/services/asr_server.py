@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 MODEL_ID = os.environ.get("ASR_MODEL", "mlx-community/parakeet-tdt-0.6b-v3")
+CAPTURE_DIR = os.environ.get("ASR_CAPTURE_DIR", "")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,12 +85,24 @@ async def transcribe(audio: UploadFile = File(...)):
             ext,
             traceback.format_exc(),
         )
-        raise
-    finally:
         os.unlink(tmp_path)
+        raise
 
     text = result.text.strip()
     duration_s = result.sentences[-1].end if result.sentences else 0.0
+
+    if CAPTURE_DIR and text:
+        import shutil, hashlib
+        os.makedirs(CAPTURE_DIR, exist_ok=True)
+        slug = hashlib.md5(text.encode()).hexdigest()[:8]
+        dst = os.path.join(CAPTURE_DIR, f"clip_{slug}.wav")
+        shutil.copy(tmp_path, dst)
+        refs = os.path.join(CAPTURE_DIR, "references.txt")
+        with open(refs, "a") as rf:
+            rf.write(f"clip_{slug}.wav {text}\n")
+        logger.info("Captured clip: %s -> %s", dst, text)
+
+    os.unlink(tmp_path)
 
     return {
         "text": text,

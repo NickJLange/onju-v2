@@ -1,0 +1,40 @@
+# onju-gateway — voice pipeline gateway container
+#
+# Requires --network host: multicast group join (239.0.0.1:12345),
+# UDP port 3000 (M5 mic audio), and TCP 3001+3002 (M5 dial-back + control)
+# don't work through rootless pasta/slirp NAT.
+#
+# Run:
+#   podman run -d --name onju-gateway --restart unless-stopped \
+#     --network host \
+#     -v ~/dev/onju-v2/pipeline/config.yaml:/app/pipeline/config.yaml:ro \
+#     -v ~/dev/onju-v2/.env:/app/.env:ro \
+#     [-e EXTRA_VAR=...] \
+#     [--device m5-echo-XXXXXX=IP:ptt] \
+#     onju-gateway
+
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libopus0 \
+        ffmpeg \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency resolution
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+WORKDIR /app
+
+# Copy project metadata first for layer caching
+COPY pyproject.toml ./
+COPY pipeline/ ./pipeline/
+
+# Install dependencies (no dev/asr extras needed in gateway)
+RUN uv pip install --system -e .
+
+# config.yaml and .env are bind-mounted at runtime — not baked into the image
+ENTRYPOINT ["python", "-m", "pipeline.main"]
