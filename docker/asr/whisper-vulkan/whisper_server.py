@@ -1,35 +1,33 @@
 """
-Whisper ASR server (whisper.cpp via pywhispercpp, Vulkan-accelerated).
+Whisper ASR server using faster-whisper (CTranslate2, INT8 + AVX-512).
 
-Implements the same /transcribe contract as pipeline/services/asr_server.py:
-  POST /transcribe  multipart field 'audio' = WAV (16kHz mono int16)
+Same /transcribe contract as pipeline/services/asr_server.py:
+  POST /transcribe  multipart 'audio' = WAV (16kHz mono int16)
                     -> {"text": str, "duration_s": float, "transcribe_time_s": float}
   GET  /health      -> {"status": "ok"|"loading", "model": str}
 
-Does NOT emit no_speech_prob — that field activates a dormant silence gate in
-the gateway (main.py) and would give this engine asymmetric behaviour vs parakeet.
-
-Run:
-    python whisper_server.py
-    python whisper_server.py --port 8101 --host 0.0.0.0 --model base.en
+Does NOT emit no_speech_prob — omitting it keeps this engine symmetric with
+parakeet (emitting it activates a dormant silence gate in main.py:204).
 
 Env vars:
-    WHISPER_MODEL      ggml model name (default: base.en)
-    WHISPER_MODEL_DIR  model cache directory (default: /models)
+    WHISPER_MODEL         faster-whisper model size (default: base.en)
+    WHISPER_MODEL_DIR     model cache dir (default: /models)
+    WHISPER_COMPUTE_TYPE  int8 | int8_float16 | float16 (default: int8)
 """
 
+import argparse
 import logging
 import os
 import tempfile
 import time
 import traceback
-import argparse
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "base.en")
 MODEL_DIR = os.environ.get("WHISPER_MODEL_DIR", "/models")
+COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,14 +49,14 @@ async def _unhandled(request: Request, exc: Exception):
 @app.on_event("startup")
 async def load_model():
     global _model
-    from pywhispercpp.model import Model
+    from faster_whisper import WhisperModel
 
     os.makedirs(MODEL_DIR, exist_ok=True)
-    logger.info("Loading whisper model '%s' from %s ...", MODEL_NAME, MODEL_DIR)
+    logger.info("Loading faster-whisper model '%s' compute_type=%s ...", MODEL_NAME, COMPUTE_TYPE)
     tic = time.time()
     try:
-        # n_threads=0 lets whisper.cpp pick optimal; Vulkan offload logged by the lib
-        _model = Model(MODEL_NAME, models_dir=MODEL_DIR, n_threads=0)
+        _model = WhisperModel(MODEL_NAME, device="cpu", compute_type=COMPUTE_TYPE,
+                              download_root=MODEL_DIR)
         logger.info("Model loaded in %.1fs", time.time() - tic)
     except Exception:
         logger.error("Failed to load model '%s'\n%s", MODEL_NAME, traceback.format_exc())
@@ -81,7 +79,9 @@ async def transcribe(audio: UploadFile = File(...)):
 
     try:
         tic = time.time()
-        segments = _model.transcribe(tmp_path)
+        segments, info = _model.transcribe(tmp_path, beam_size=5, language="en")
+        # faster-whisper returns a generator — consume it to get all segments
+        segments = list(segments)
         elapsed = time.time() - tic
     except Exception:
         logger.error("Transcription failed for %s\n%s", audio.filename, traceback.format_exc())
@@ -90,8 +90,7 @@ async def transcribe(audio: UploadFile = File(...)):
         os.unlink(tmp_path)
 
     text = " ".join(s.text.strip() for s in segments).strip()
-    # t1 is in 10ms units; last segment end = audio duration
-    duration_s = (segments[-1].t1 * 0.01) if segments else 0.0
+    duration_s = segments[-1].end if segments else info.duration
 
     return {
         "text": text,
@@ -103,16 +102,19 @@ async def transcribe(audio: UploadFile = File(...)):
 if __name__ == "__main__":
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Whisper ASR server (Vulkan)")
+    parser = argparse.ArgumentParser(description="Whisper ASR server (faster-whisper)")
     parser.add_argument("--port", type=int, default=8101)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--model", default=None)
     parser.add_argument("--model-dir", default=None)
+    parser.add_argument("--compute-type", default=None)
     args = parser.parse_args()
 
     if args.model:
         MODEL_NAME = args.model
     if args.model_dir:
         MODEL_DIR = args.model_dir
+    if args.compute_type:
+        COMPUTE_TYPE = args.compute_type
 
     uvicorn.run(app, host=args.host, port=args.port)

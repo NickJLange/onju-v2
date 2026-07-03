@@ -1,57 +1,45 @@
-# whisper-vulkan — whisper.cpp with GGML Vulkan backend
+# onju-asr-whisper — faster-whisper (CTranslate2) ASR container
 #
-# GPU passthrough (rootless, lunarBeacon AMD RADV):
+# CPU-optimised: CTranslate2 uses INT8 quantisation + AVX-512 on Zen 5 CPUs
+# (lunarBeacon Strix Halo). Same /transcribe contract as parakeet.
+#
+# Note: whisper.cpp Vulkan was attempted but hits a GGML Vulkan crash on
+# GFX1151 (Strix Halo). faster-whisper on Zen 5 with AVX-512 + INT8 is
+# competitive and avoids the Vulkan dependency.
+#
+# Run:
 #   podman run -d --restart unless-stopped \
-#     --device /dev/dri --group-add keep-groups \
 #     -p 8101:8101 -v whisper-models:/models \
 #     -e WHISPER_MODEL=base.en \
-#     onju-whisper-vulkan
+#     onju-asr-whisper
 #
-# Smoke test (run inside container after start):
-#   podman exec <ctr> vulkaninfo --summary
-#   podman logs <ctr>   # check for "Vulkan" + AMD device in whisper.cpp init
+# Smoke test:
+#   curl http://localhost:8101/health
 
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ── Build + runtime deps ────────────────────────────────────────────────────
-# libvulkan-dev + glslc = needed to compile whisper.cpp Vulkan shaders
-# mesa-vulkan-drivers = RADV ICD (libvulkan_radeon.so) for runtime
-# vulkan-tools = vulkaninfo for smoke testing inside the container
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip python3-dev \
-    cmake build-essential ninja-build git \
-    libvulkan-dev \
-    glslc \
-    libvulkan1 \
-    mesa-vulkan-drivers \
-    vulkan-tools \
+    python3 python3-pip \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python deps ─────────────────────────────────────────────────────────────
-# fastapi/uvicorn first (no heavy build)
-RUN pip3 install --break-system-packages fastapi uvicorn python-multipart
+RUN pip3 install --break-system-packages \
+    faster-whisper \
+    fastapi \
+    uvicorn \
+    python-multipart
 
-# Build pywhispercpp with Vulkan support.
-# CMAKE_ARGS is read by pywhispercpp's setup.py and passed to the cmake build.
-# libwhisper.so lands in the Python dist-packages dir (not /usr/local/lib), so
-# we add a ldconfig entry so the runtime linker can find it.
-RUN CMAKE_ARGS="-DGGML_VULKAN=1" \
-    pip3 install --break-system-packages --no-binary pywhispercpp pywhispercpp \
-    && echo /usr/local/lib/python3.12/dist-packages > /etc/ld.so.conf.d/pywhispercpp.conf \
-    && ldconfig
-
-# ── App ─────────────────────────────────────────────────────────────────────
 WORKDIR /app
 COPY whisper_server.py /app/whisper_server.py
 
-# Model cache — mount a named volume here to avoid re-downloading
 VOLUME ["/models"]
 
 ENV WHISPER_MODEL=base.en
 ENV WHISPER_MODEL_DIR=/models
+# compute_type: int8 for fastest CPU, int8_float16 for mixed, float16 for accuracy
+ENV WHISPER_COMPUTE_TYPE=int8
 
 EXPOSE 8101
 
