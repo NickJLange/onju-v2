@@ -517,8 +517,18 @@ def _log_startup_summary(config: dict) -> None:
     log.info(f"  ASR   {config['asr']['url']}")
 
     if backend_name == "hermes":
-        model = backend_cfg.get("model", "hermes-agent")
-        log.info(f"  LLM   hermes: {model} @ {backend_cfg.get('base_url', '?')}")
+        profiles = conv_cfg.get("hermes_profiles", {})
+        if profiles:
+            routes = conv_cfg.get("device_routes", {})
+            for pname, pcfg in profiles.items():
+                model = pcfg.get("model", "hermes-agent")
+                log.info(f"  LLM   hermes[{pname}]: {model} @ {pcfg.get('base_url', '?')}")
+            if routes:
+                route_str = ", ".join(f"{k}→{v}" for k, v in routes.items())
+                log.info(f"        routes: {route_str}")
+        else:
+            model = backend_cfg.get("model", "hermes-agent")
+            log.info(f"  LLM   hermes: {model} @ {backend_cfg.get('base_url', '?')}")
         stall_cfg = conv_cfg.get("stall", {})
         if stall_cfg.get("enabled"):
             log.info(f"  STALL {stall_cfg.get('model', '?')} @ {stall_cfg.get('base_url', '?')} "

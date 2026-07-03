@@ -34,6 +34,27 @@ async def sentence_chunks(deltas: AsyncIterator[str]) -> AsyncIterator[str]:
         yield tail
 
 
+def _resolve_hermes_cfg(conv_cfg: dict, device_id: str) -> dict:
+    """Return the hermes profile config for a given device_id.
+
+    Resolution order:
+      1. hermes_profiles + device_routes: exact hostname match → "default" → first profile
+      2. Fallback: legacy single ``hermes:`` key (backwards-compat)
+    """
+    profiles = conv_cfg.get("hermes_profiles", {})
+    if profiles:
+        routes = conv_cfg.get("device_routes", {})
+        name = routes.get(device_id) or routes.get("default") or next(iter(profiles))
+        if name not in profiles:
+            raise ValueError(
+                f"device_routes maps '{device_id}' to profile '{name}' "
+                f"but that profile is not defined in hermes_profiles"
+            )
+        return profiles[name]
+    # backwards-compat: single hermes block
+    return conv_cfg["hermes"]
+
+
 def create_backend(config: dict, device_id: str) -> ConversationBackend:
     """Create a conversation backend based on config."""
     conv_cfg = config["conversation"]
@@ -42,6 +63,6 @@ def create_backend(config: dict, device_id: str) -> ConversationBackend:
     if backend == "conversational":
         return ConversationalBackend(conv_cfg["conversational"], device_id)
     elif backend == "hermes":
-        return HermesBackend(conv_cfg["hermes"], device_id)
+        return HermesBackend(_resolve_hermes_cfg(conv_cfg, device_id), device_id)
     else:
         raise ValueError(f"Unknown conversation backend: {backend}")

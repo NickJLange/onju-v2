@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# onju-asr — manage the parakeet ASR LaunchAgent on macOS
+# Usage: onju-asr <install|uninstall|start|stop|restart|status|logs>
+set -euo pipefail
+
+LABEL="com.onju.asr.parakeet"
+PLIST_DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+DOMAIN="gui/$(id -u)"
+SERVICE="${DOMAIN}/${LABEL}"
+
+# Locate the repo directory (this script lives in deploy/mac/ inside it)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+TEMPLATE="${SCRIPT_DIR}/${LABEL}.plist.template"
+
+# ---------- defaults (override via env) ----------
+PYTHON="${PYTHON:-${REPO_DIR}/.venv/bin/python}"
+HOST="${ASR_HOST:-$(ipconfig getifaddr en7 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || echo "0.0.0.0")}"
+PORT="${ASR_PORT:-8100}"
+MODEL="${ASR_MODEL:-mlx-community/parakeet-tdt-0.6b-v3}"
+DYLD="${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib}"
+LOG_DIR="$HOME/Library/Logs"
+LOG="${LOG_DIR}/onju-asr.log"
+
+# ---------- helpers ----------
+die()  { echo "ERROR: $*" >&2; exit 1; }
+info() { echo "==> $*"; }
+
+render_plist() {
+  [[ -f "$TEMPLATE" ]] || die "Template not found: $TEMPLATE"
+  [[ -x "$PYTHON" ]]   || die "Python not found: $PYTHON  (run: uv venv && uv pip install -e '.[asr]')"
+  mkdir -p "$LOG_DIR"
+  sed \
+    -e "s|__PYTHON__|${PYTHON}|g" \
+    -e "s|__REPO__|${REPO_DIR}|g" \
+    -e "s|__HOST__|${HOST}|g" \
+    -e "s|__PORT__|${PORT}|g" \
+    -e "s|__MODEL__|${MODEL}|g" \
+    -e "s|__DYLD__|${DYLD}|g" \
+    -e "s|__LOG__|${LOG}|g" \
+    "$TEMPLATE"
+}
+
+ensure_not_bootstrapped() {
+  # Silently unload if already registered; launchctl exits non-zero when not found — ignore
+  launchctl bootout "$SERVICE" "$PLIST_DEST" 2>/dev/null || true
+  launchctl bootout "$DOMAIN"  "$PLIST_DEST" 2>/dev/null || true
+}
+
+wait_healthy() {
+  local url="http://${HOST}:${PORT}/health"
+  local i
+  for i in $(seq 1 30); do
+    if curl -sf "$url" 2>/dev/null | grep -q '"ok"'; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "WARNING: service did not become healthy within 60s — check logs: onju-asr logs"
+  return 1
+}
+
+# ---------- commands ----------
+cmd_install() {
+  info "Rendering plist → ${PLIST_DEST}"
+  render_plist > "$PLIST_DEST"
+  ensure_not_bootstrapped
+  launchctl bootstrap "$DOMAIN" "$PLIST_DEST"
+  info "Installed and bootstrapped. Run 'onju-asr status' to check."
+}
+
+cmd_uninstall() {
+  launchctl bootout "$SERVICE" "$PLIST_DEST" 2>/dev/null || \
+    launchctl bootout "$DOMAIN" "$PLIST_DEST" 2>/dev/null || true
+  [[ -f "$PLIST_DEST" ]] && rm -f "$PLIST_DEST" && info "Removed $PLIST_DEST"
+  info "Uninstalled."
+}
+
+cmd_start() {
+  if ! [[ -f "$PLIST_DEST" ]]; then
+    die "Not installed. Run: onju-asr install"
+  fi
+  # kickstart -k kills any running instance then starts fresh
+  launchctl kickstart -k "$SERVICE" && info "Started."
+}
+
+cmd_stop() {
+  launchctl bootout "$SERVICE" "$PLIST_DEST" 2>/dev/null || \
+    launchctl bootout "$DOMAIN"  "$PLIST_DEST" 2>/dev/null || \
+    die "Service not found — already stopped?"
+  info "Stopped."
+}
+
+cmd_restart() {
+  launchctl kickstart -k "$SERVICE" && info "Restarted."
+}
+
+cmd_status() {
+  echo "--- launchctl ---"
+  launchctl print "$SERVICE" 2>/dev/null || echo "(service not registered)"
+  echo ""
+  echo "--- health ---"
+  local url="http://${HOST}:${PORT}/health"
+  curl -sf "$url" 2>/dev/null || echo "(not responding at ${url})"
+  echo ""
+}
+
+cmd_logs() {
+  [[ -f "$LOG" ]] || die "Log file not found: $LOG"
+  tail -f "$LOG"
+}
+
+# ---------- dispatch ----------
+CMD="${1:-}"
+case "$CMD" in
+  install)   cmd_install   ;;
+  uninstall) cmd_uninstall ;;
+  start)     cmd_start     ;;
+  stop)      cmd_stop      ;;
+  restart)   cmd_restart   ;;
+  status)    cmd_status    ;;
+  logs)      cmd_logs      ;;
+  *)
+    echo "Usage: onju-asr <install|uninstall|start|stop|restart|status|logs>"
+    echo ""
+    echo "Environment overrides:"
+    echo "  PYTHON      path to python binary  (default: <repo>/.venv/bin/python)"
+    echo "  ASR_HOST    bind address            (default: auto-detect LAN IP)"
+    echo "  ASR_PORT    bind port               (default: 8100)"
+    echo "  ASR_MODEL   huggingface model id    (default: mlx-community/parakeet-tdt-0.6b-v3)"
+    echo "  DYLD_FALLBACK_LIBRARY_PATH          (default: /opt/homebrew/lib)"
+    exit 1
+    ;;
+esac

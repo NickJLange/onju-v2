@@ -46,6 +46,10 @@ async def load_model():
     global model
     from parakeet_mlx import from_pretrained
 
+    # Verify DYLD_FALLBACK_LIBRARY_PATH survived launchd/SIP (needed for libopus)
+    dyld = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "<not set>")
+    logger.info("DYLD_FALLBACK_LIBRARY_PATH=%s", dyld)
+
     tic = time.time()
     try:
         model = from_pretrained(MODEL_ID)
