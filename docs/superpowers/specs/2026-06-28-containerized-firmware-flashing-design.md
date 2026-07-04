@@ -97,7 +97,7 @@ runtime** — everything heavy is baked at build time.
 
 ### Data flow (Linux, the primary path)
 
-```
+```text
 flash.sh (host)                          podman container (toolchain)
   render credentials.h  ─┐
   write git_hash.h       ├─ bind-mount repo → /work

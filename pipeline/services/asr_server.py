@@ -9,11 +9,14 @@ Install dependencies:
     uv pip install -e ".[asr]"
 """
 
+import hashlib
 import logging
 import os
+import shutil
 import tempfile
 import time
 import traceback
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -27,23 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("parakeet")
 
-app = FastAPI()
 model = None
 
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.error(
-        "Unhandled exception on %s %s\n%s",
-        request.method,
-        request.url.path,
-        traceback.format_exc(),
-    )
-    return JSONResponse(status_code=500, content={"error": str(exc)})
-
-
-@app.on_event("startup")
-async def load_model():
+async def _load_model():
     global model
     from parakeet_mlx import from_pretrained
 
@@ -60,6 +50,26 @@ async def load_model():
         raise
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _load_model()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception on %s %s\n%s",
+        request.method,
+        request.url.path,
+        traceback.format_exc(),
+    )
+    return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok" if model else "loading", "model": MODEL_ID}
@@ -67,6 +77,9 @@ async def health():
 
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)):
+    if model is None:
+        return JSONResponse(status_code=503, content={"error": "model not loaded"})
+
     raw = await audio.read()
 
     ext = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
@@ -92,9 +105,8 @@ async def transcribe(audio: UploadFile = File(...)):
     duration_s = result.sentences[-1].end if result.sentences else 0.0
 
     if CAPTURE_DIR and text:
-        import shutil, hashlib
         os.makedirs(CAPTURE_DIR, exist_ok=True)
-        slug = hashlib.md5(text.encode()).hexdigest()[:8]
+        slug = f"{int(time.time() * 1000)}_{hashlib.md5(text.encode()).hexdigest()[:4]}"
         dst = os.path.join(CAPTURE_DIR, f"clip_{slug}.wav")
         shutil.copy(tmp_path, dst)
         refs = os.path.join(CAPTURE_DIR, "references.txt")

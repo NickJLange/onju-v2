@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fail() { echo "FAIL: $1" >&2; exit 1; }
+trap 'rm -f m5_echo/credentials.h' EXIT
 
 rm -f m5_echo/credentials.h
 # Force the non-macOS path and supply creds via env; dry-run skips podman.

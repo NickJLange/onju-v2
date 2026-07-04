@@ -12,7 +12,13 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_env(value: str) -> str:
-    return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
+    def _sub(m: re.Match) -> str:
+        env_val = os.environ.get(m.group(1))
+        if env_val is None:
+            log.warning("api_key references $%s which is not set — auth will fail", m.group(1))
+            return ""
+        return env_val
+    return re.sub(r"\$\{(\w+)\}", _sub, value)
 
 
 class HermesBackend:
@@ -39,10 +45,6 @@ class HermesBackend:
         self.device_id = device_id
         self.base_url = cfg["base_url"].rstrip("/")
         self.api_key = _resolve_env(cfg.get("api_key", "none"))
-        if self.api_key.startswith("${"):
-            log.warning(
-                f"Hermes api_key env var not resolved: {self.api_key} — is it exported?"
-            )
 
         prefix = cfg.get("session_key_prefix", "agent:onju:voice")
         self.session_key = f"{prefix}:{device_id}"

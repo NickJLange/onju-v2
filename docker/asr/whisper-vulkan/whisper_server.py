@@ -21,6 +21,7 @@ import os
 import tempfile
 import time
 import traceback
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -35,19 +36,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("whisper")
 
-app = FastAPI()
 _model = None
 
 
-@app.exception_handler(Exception)
-async def _unhandled(request: Request, exc: Exception):
-    logger.error("Unhandled exception on %s %s\n%s",
-                 request.method, request.url.path, traceback.format_exc())
-    return JSONResponse(status_code=500, content={"error": str(exc)})
-
-
-@app.on_event("startup")
-async def load_model():
+async def _load_model():
     global _model
     from faster_whisper import WhisperModel
 
@@ -63,6 +55,22 @@ async def load_model():
         raise
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _load_model()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s %s\n%s",
+                 request.method, request.url.path, traceback.format_exc())
+    return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok" if _model else "loading", "model": MODEL_NAME}
@@ -70,6 +78,9 @@ async def health():
 
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)):
+    if _model is None:
+        return JSONResponse(status_code=503, content={"error": "model not loaded"})
+
     raw = await audio.read()
     ext = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
 

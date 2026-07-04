@@ -31,7 +31,7 @@ The first startup downloads the model (~1 GB) from HuggingFace — allow ~30–6
 | `install` | Render plist with absolute paths → `~/Library/LaunchAgents/`, bootstrap |
 | `uninstall` | Bootout + remove plist |
 | `start` | `kickstart -k` (kill-and-restart) |
-| `stop` | `bootout` (KeepAlive is paused until `start` / `install` again) |
+| `stop` | `launchctl stop` (process stops; service stays registered; `start` resumes it) |
 | `restart` | `kickstart -k` |
 | `status` | launchctl print + `/health` curl |
 | `logs` | `tail -f ~/Library/Logs/onju-asr.log` |
@@ -60,15 +60,15 @@ ASR_HOST=192.168.100.23 ASR_MODEL=mlx-community/parakeet-tdt-1.1b-v2 \
 plist with **absolute paths** (launchd does not expand `~`), then bootstraps it
 into the `gui/<uid>` LaunchAgent domain.
 
-`KeepAlive: true` means launchd restarts the process on crash. To permanently
-stop it, run `onju-asr stop` (which issues `bootout`); `KeepAlive` only relaunches
-after an unclean exit, not after a manual `bootout`.
+`KeepAlive: true` means launchd restarts the process on crash. To stop it temporarily, run `onju-asr stop` (`launchctl stop` — the service stays registered
+so `start` can resume it). `KeepAlive` will restart a crashed process but not a cleanly
+stopped one. To remove it entirely, use `onju-asr uninstall`.
 
 `DYLD_FALLBACK_LIBRARY_PATH` is set explicitly in the plist `EnvironmentVariables`
 because launchd does not inherit your shell's environment. The startup log prints
 the resolved value so you can verify it survived SIP:
 
-```
+```text
 2026-07-03 12:00:00 INFO parakeet: DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 ```
 

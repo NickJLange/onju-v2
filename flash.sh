@@ -78,7 +78,7 @@ detect_device() {
 run_toolchain() {
     local action="$1" cport="${2:-}"
     if [ "$FLASH_RUNTIME" = "native" ]; then
-        "$REPO/docker/flash/entrypoint.sh" "$TARGET" "$action" "$cport"
+        FLASH_WORKDIR="$REPO" "$REPO/docker/flash/entrypoint.sh" "$TARGET" "$action" "$cport"
         return
     fi
     local tty=""; [ -t 0 ] && tty="-it"

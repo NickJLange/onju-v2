@@ -25,6 +25,7 @@ References file format:
 """
 
 import argparse
+import math
 import re
 import statistics
 import sys
@@ -61,6 +62,11 @@ def _wer(reference: str, hypothesis: str) -> float:
             else:
                 d[i][j] = 1 + min(d[i - 1][j], d[i][j - 1], d[i - 1][j - 1])
     return d[len(r)][len(h)] / len(r)
+
+
+def _percentile(data: list, p: float) -> float:
+    s = sorted(data)
+    return s[min(len(s) - 1, math.ceil(len(s) * p / 100) - 1)]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -105,10 +111,8 @@ def main():
     parser = argparse.ArgumentParser(description="ASR bake-off harness")
     parser.add_argument("clips_dir", help="Directory with WAV clips + references.txt")
     parser.add_argument(
-        "--candidates", nargs="+", metavar="NAME=URL",
-        default=["parakeet=http://192.168.100.23:8100",
-                 "whisper-vulkan=http://localhost:8101"],
-        help="Candidate endpoints as name=url pairs",
+        "--candidates", nargs="+", metavar="NAME=URL", required=True,
+        help="Candidate endpoints as name=url pairs, e.g. parakeet=http://host:8100",
     )
     parser.add_argument(
         "--warmup", type=int, default=1,
@@ -189,9 +193,9 @@ def main():
         if transcribe_times:
             results[name] = {
                 "t_svc_p50": statistics.median(transcribe_times),
-                "t_svc_p95": sorted(transcribe_times)[int(len(transcribe_times) * 0.95)],
+                "t_svc_p95": _percentile(transcribe_times, 95),
                 "t_rtt_p50": statistics.median(wall_rtts),
-                "t_rtt_p95": sorted(wall_rtts)[int(len(wall_rtts) * 0.95)],
+                "t_rtt_p95": _percentile(wall_rtts, 95),
                 "wer_mean":  sum(wers) / len(wers) if wers else float("nan"),
                 "n": len(transcribe_times),
                 "errors": errors,

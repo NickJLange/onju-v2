@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Toolchain entrypoint — runs INSIDE the container against the bind-mounted /work.
+# Toolchain entrypoint — runs inside the container (bind-mounted /work) OR
+# directly on the host in native mode (flash.sh sets FLASH_WORKDIR=$REPO).
 # Usage: flash-entrypoint <target> <action> [port]
 set -euo pipefail
 
 TARGET="${1:-m5_echo}"
 ACTION="${2:-flash}"     # compile | upload | flash (compile+upload) | monitor
 PORT="${3:-}"
+WORKDIR="${FLASH_WORKDIR:-/work}"
 
 case "$TARGET" in
     onjuino)
         FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"
-        DIR="/work/onjuino"; INO="onjuino.ino" ;;
+        DIR="${WORKDIR}/onjuino"; INO="onjuino.ino" ;;
     m5_echo|m5echo)
         FQBN="esp32:esp32:m5stack_atom:UploadSpeed=1500000"
-        DIR="/work/m5_echo"; INO="m5_echo.ino" ;;
+        DIR="${WORKDIR}/m5_echo"; INO="m5_echo.ino" ;;
     *) echo "entrypoint: unknown target '$TARGET'" >&2; exit 2 ;;
 esac
 BUILD="$DIR/build"

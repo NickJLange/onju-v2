@@ -20,11 +20,12 @@ async def sentence_chunks(deltas: AsyncIterator[str]) -> AsyncIterator[str]:
     async for delta in deltas:
         buffer += delta
         while True:
-            m = _SENTENCE_END.search(buffer)
-            if not m:
-                m = _SENTENCE_END_NOSPACE.search(buffer)
-            if not m:
+            m1 = _SENTENCE_END.search(buffer)
+            m2 = _SENTENCE_END_NOSPACE.search(buffer)
+            matches = [m for m in (m1, m2) if m]
+            if not matches:
                 break
+            m = min(matches, key=lambda x: x.start())
             sentence = buffer[: m.end()].strip()
             buffer = buffer[m.end():]
             if sentence:
@@ -52,7 +53,13 @@ def _resolve_hermes_cfg(conv_cfg: dict, device_id: str) -> dict:
             )
         return profiles[name]
     # backwards-compat: single hermes block
-    return conv_cfg["hermes"]
+    hermes_cfg = conv_cfg.get("hermes")
+    if hermes_cfg is None:
+        raise ValueError(
+            "conversation backend is 'hermes' but config has neither "
+            "'hermes_profiles' nor a 'hermes' block"
+        )
+    return hermes_cfg
 
 
 def create_backend(config: dict, device_id: str) -> ConversationBackend:

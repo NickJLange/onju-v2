@@ -75,7 +75,7 @@ FLASH_RUNTIME=native ./flash.sh
 When `FLASH_RUNTIME=container`, `flash.sh` passes the serial device into the
 container with:
 
-```
+```bash
 --device <dev>:<dev> --group-add keep-groups
 ```
 

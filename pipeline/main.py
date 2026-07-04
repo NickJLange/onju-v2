@@ -458,7 +458,7 @@ async def control_server(config: dict, manager: DeviceManager):
                 headers[k.strip().lower()] = v.strip()
 
             body = b""
-            if cl := int(headers.get("content-length", 0)):
+            if cl := min(int(headers.get("content-length", 0)), 65_536):
                 body = await reader.readexactly(cl)
 
             if path == "/devices" and method == "GET":
@@ -502,7 +502,7 @@ async def control_server(config: dict, manager: DeviceManager):
 
 
 def _http_respond(writer: asyncio.StreamWriter, status: int, body: str):
-    reason = {200: "OK", 201: "Created", 404: "Not Found"}.get(status, "OK")
+    reason = {200: "OK", 201: "Created", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
     writer.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n{body}".encode())
 
 

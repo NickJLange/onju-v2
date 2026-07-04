@@ -34,13 +34,22 @@ if grep -qE "^API_SERVER_KEY=" "$ENV_FILE"; then
     API_KEY="$(grep -E "^API_SERVER_KEY=" "$ENV_FILE" | head -1 | cut -d= -f2-)"
     echo "==> Reusing existing API_SERVER_KEY."
 else
+    set +o pipefail
     API_KEY="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48)"
+    set -o pipefail
     echo "API_SERVER_KEY=${API_KEY}" >> "$ENV_FILE"
     echo "==> Generated a new API_SERVER_KEY."
 fi
 
 set_env API_SERVER_ENABLED true
-set_env API_SERVER_HOST 127.0.0.1   # loopback only; expose via a tunnel/proxy, not 0.0.0.0
+# Always enforce loopback — overwrite if a stale 0.0.0.0 binding exists.
+existing_host="$(grep -E "^API_SERVER_HOST=" "$ENV_FILE" | cut -d= -f2- || true)"
+if [ -n "$existing_host" ] && [ "$existing_host" != "127.0.0.1" ]; then
+    sed -i.bak "s/^API_SERVER_HOST=.*/API_SERVER_HOST=127.0.0.1/" "$ENV_FILE" && rm -f "${ENV_FILE}.bak"
+    echo "==> Overrode API_SERVER_HOST to 127.0.0.1 (was $existing_host) — security: loopback only."
+else
+    set_env API_SERVER_HOST 127.0.0.1
+fi
 set_env API_SERVER_PORT 8642
 
 cat <<EOF
@@ -78,7 +87,7 @@ cat <<EOF
 
         hermes gateway
         curl -s http://127.0.0.1:8642/v1/toolsets \\
-          -H "Authorization: Bearer \$API_SERVER_KEY" | grep -i terminal
+          -H "Authorization: Bearer ${API_KEY}" | grep -i terminal
         # ^ should print nothing — terminal must be absent.
 
 ==> Done. Full guide: docs/hermes-secure-setup.md
