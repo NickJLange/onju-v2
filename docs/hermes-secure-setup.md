@@ -137,7 +137,7 @@ server {
     server_name hermes.lan.example;
 
     # Source-IP allowlist — tighten to the pipeline host's /32, not the whole subnet.
-    allow 192.168.100.0/24;
+    allow 192.168.100.20/32;   # replace with your pipeline host's actual IP
     deny  all;
 
     location /v1/ {

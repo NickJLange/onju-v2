@@ -37,7 +37,7 @@ a wrapper CLI presenting systemctl-style verbs.
 
 ### Files (new)
 - `deploy/mac/com.onju.asr.parakeet.plist.template` — LaunchAgent template with
-  `__PYTHON__`, `__REPO__`, `__MODEL__`, `__PORT__`, `__DYLD__`, `__LOG__` placeholders.
+  `__PYTHON__`, `__REPO__`, `__MODEL__`, `__HOST__`, `__PORT__`, `__DYLD__`, `__LOG__` placeholders.
 - `deploy/mac/onju-asr` — wrapper CLI (bash). Verbs:
   `install | uninstall | start | stop | restart | status | logs`.
 - `deploy/mac/README.md` — usage.

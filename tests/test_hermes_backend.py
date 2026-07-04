@@ -83,8 +83,11 @@ async def test_headers_and_session():
 
 async def test_env_resolution():
     os.environ["HERMES_TEST_KEY"] = "resolved-secret"
-    backend = HermesBackend(_cfg(api_key="${HERMES_TEST_KEY}"), device_id="d")
-    assert backend.api_key == "resolved-secret", backend.api_key
+    try:
+        backend = HermesBackend(_cfg(api_key="${HERMES_TEST_KEY}"), device_id="d")
+        assert backend.api_key == "resolved-secret", backend.api_key
+    finally:
+        os.environ.pop("HERMES_TEST_KEY", None)
     print("PASS: ${ENV_VAR} api_key resolution")
 
 

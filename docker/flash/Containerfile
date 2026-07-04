@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
-        | BINDIR=/usr/local/bin sh -s ${ARDUINO_CLI_VERSION}
+RUN curl -fsSL "https://raw.githubusercontent.com/arduino/arduino-cli/v${ARDUINO_CLI_VERSION}/install.sh" \
+        | BINDIR=/usr/local/bin sh -s "${ARDUINO_CLI_VERSION}"
 
 # Install the pinned core + libraries, then slim the image in the SAME layer:
 # both flash targets are xtensa (ESP32-PICO-D4, ESP32-S3), so the RISC-V toolchain,

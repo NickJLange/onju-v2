@@ -44,7 +44,7 @@ def _resolve_hermes_cfg(conv_cfg: dict, device_id: str) -> dict:
     """
     profiles = conv_cfg.get("hermes_profiles", {})
     if profiles:
-        routes = conv_cfg.get("device_routes", {})
+        routes = conv_cfg.get("device_routes") or {}
         name = routes.get(device_id) or routes.get("default") or next(iter(profiles))
         if name not in profiles:
             raise ValueError(

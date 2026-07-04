@@ -10,7 +10,7 @@ lunarBeacon gateway can reach it.
 # from the repo root
 uv venv
 uv pip install -e ".[asr]" "numba>=0.61" "llvmlite>=0.44"
-brew install opus   # or: brew install libopus
+brew install opus
 ```
 
 ## Quick start

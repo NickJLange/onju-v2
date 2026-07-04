@@ -54,6 +54,18 @@ detect_device() {
     local explicit="$1" dev=""
     if [ -n "$explicit" ]; then
         dev="$explicit"
+    elif [ -n "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_OS" = "darwin" ]; then
+        # Flasher machine (QEMU): USB is passed through into the VM, not the macOS host.
+        # Detect from inside the machine; host /dev/cu.* paths are wrong here.
+        dev=$(podman machine ssh "$PODMAN_CONNECTION" \
+            'for g in /dev/serial/by-id/* /dev/ttyUSB* /dev/ttyACM*; do [ -e "$g" ] && echo "$g" && break; done' \
+            2>/dev/null | head -1 || true)
+        if [ -z "$dev" ]; then
+            echo "ERROR: no serial device found in flasher machine '$PODMAN_CONNECTION'."
+            echo "       Ensure M5 is plugged in and USB pass-through is active, then retry."
+            echo "       Or pass the port explicitly: PODMAN_CONNECTION=$PODMAN_CONNECTION ./flash.sh $TARGET /dev/ttyUSB0"
+            exit 1
+        fi
     elif [ "$FLASH_OS" = "darwin" ]; then
         for g in /dev/cu.usbserial-* /dev/cu.usbmodem*; do
             [ -e "$g" ] && { dev="$g"; break; }
@@ -63,7 +75,7 @@ detect_device() {
             [ -e "$g" ] && { dev="$g"; break; }
         done
     fi
-    [ -n "$dev" ] || { echo "ERROR: no serial device found (pass one explicitly)"; exit 1; }
+    [ -n "$dev" ] || { echo "ERROR: no serial device found (pass one explicitly, e.g. /dev/ttyUSB0)"; exit 1; }
     CONTAINER_PORT="$dev"
     if [ "$FLASH_RUNTIME" = "container" ]; then
         DEVICE_ARGS="--device ${dev}:${dev} --group-add keep-groups"
@@ -221,12 +233,20 @@ fi
 # -------------------------------------------------------
 # Ensure image, then dispatch the requested action
 # -------------------------------------------------------
-ensure_image
+[ "$FLASH_DRYRUN" = "1" ] || ensure_image
 
 if [ "$COMPILE_ONLY" = true ]; then
     echo "Compile-only mode"
     run_toolchain compile
     exit 0
+fi
+
+if [ "$FLASH_OS" = "darwin" ] && [ -z "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_RUNTIME" = "container" ]; then
+    echo "ERROR: container upload on macOS requires the QEMU flasher machine."
+    echo "       See docker/flash/README.md (macOS upload appendix)."
+    echo "       To upload natively: FLASH_RUNTIME=native ./flash.sh $TARGET"
+    echo "       To use the flasher machine: PODMAN_CONNECTION=flasher ./flash.sh $TARGET"
+    exit 1
 fi
 
 DEVICE_ARGS=""

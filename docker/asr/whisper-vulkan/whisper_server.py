@@ -38,6 +38,8 @@ logger = logging.getLogger("whisper")
 
 _model = None
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB — guard against accidental/malicious oversized uploads
+
 
 async def _load_model():
     global _model
@@ -68,7 +70,7 @@ app = FastAPI(lifespan=lifespan)
 async def _unhandled(request: Request, exc: Exception):
     logger.error("Unhandled exception on %s %s\n%s",
                  request.method, request.url.path, traceback.format_exc())
-    return JSONResponse(status_code=500, content={"error": str(exc)})
+    return JSONResponse(status_code=500, content={"error": "internal server error"})
 
 
 @app.get("/health")
@@ -81,7 +83,9 @@ async def transcribe(audio: UploadFile = File(...)):
     if _model is None:
         return JSONResponse(status_code=503, content={"error": "model not loaded"})
 
-    raw = await audio.read()
+    raw = await audio.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return JSONResponse(status_code=413, content={"error": "audio file too large"})
     ext = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
 
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
