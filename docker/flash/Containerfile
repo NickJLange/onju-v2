@@ -1,0 +1,39 @@
+FROM debian:bookworm-slim
+
+# --- Reproducibility pins (bump deliberately; see Step 5 to lock resolved versions) ---
+ARG ARDUINO_CLI_VERSION=1.2.2
+ARG ESP32_CORE_VERSION=3.2.0
+ARG NEOPIXEL_VERSION=1.12.3
+ARG ESP32_OPUS_VERSION=1.0.3
+
+ENV ARDUINO_DIRECTORIES_DATA=/opt/arduino/data \
+    ARDUINO_DIRECTORIES_DOWNLOADS=/opt/arduino/downloads \
+    ARDUINO_DIRECTORIES_USER=/opt/arduino/user
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://raw.githubusercontent.com/arduino/arduino-cli/v${ARDUINO_CLI_VERSION}/install.sh" \
+        | BINDIR=/usr/local/bin sh -s "${ARDUINO_CLI_VERSION}"
+
+# Install the pinned core + libraries, then slim the image in the SAME layer:
+# both flash targets are xtensa (ESP32-PICO-D4, ESP32-S3), so the RISC-V toolchain,
+# the gdb debuggers, JTAG/openocd, and the arduino-cli archive cache are all dead
+# weight. Deleting them here (not a later layer) is what actually shrinks the image.
+RUN arduino-cli config init \
+    && arduino-cli config set network.connection_timeout 600s \
+    && arduino-cli config add board_manager.additional_urls \
+         https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json \
+    && arduino-cli core update-index \
+    && arduino-cli core install esp32:esp32@${ESP32_CORE_VERSION} \
+    && arduino-cli lib install "Adafruit NeoPixel@${NEOPIXEL_VERSION}" \
+    && arduino-cli lib install "esp32_opus${ESP32_OPUS_VERSION:+@${ESP32_OPUS_VERSION}}" \
+    && _T=/opt/arduino/data/packages/esp32/tools \
+    && rm -rf "$_T/esp-rv32" "$_T/riscv32-esp-elf-gdb" "$_T/xtensa-esp-elf-gdb" "$_T/openocd-esp32" \
+    && rm -rf "${ARDUINO_DIRECTORIES_DOWNLOADS:?}"/*
+
+WORKDIR /work
+COPY entrypoint.sh /usr/local/bin/flash-entrypoint
+RUN chmod +x /usr/local/bin/flash-entrypoint
+ENTRYPOINT ["/usr/local/bin/flash-entrypoint"]

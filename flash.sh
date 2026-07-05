@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+FLASH_OS="$(printf '%s' "${FLASH_OS:-$(uname -s)}" | tr '[:upper:]' '[:lower:]')"  # darwin | linux
 
 # -------------------------------------------------------
 # Target config
@@ -11,25 +12,16 @@ shift 2>/dev/null || true
 
 case "$TARGET" in
     onjuino)
-        FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"
         PROJECT_DIR="$REPO/onjuino"
-        INO_NAME="onjuino.ino"
-        PORT_GLOBS=("/dev/cu.usbmodem*")
         ;;
     m5_echo|m5echo)
-        FQBN="esp32:esp32:m5stack_atom:UploadSpeed=1500000"
         PROJECT_DIR="$REPO/m5_echo"
-        INO_NAME="m5_echo.ino"
-        PORT_GLOBS=("/dev/cu.usbserial-*" "/dev/cu.usbmodem*")
         ;;
     --*|compile*)
         # No target specified, treat as flag — default to onjuino
         set -- "$TARGET" "$@"
         TARGET="onjuino"
-        FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"
         PROJECT_DIR="$REPO/onjuino"
-        INO_NAME="onjuino.ino"
-        PORT_GLOBS=("/dev/cu.usbmodem*")
         ;;
     *)
         echo "Unknown target: $TARGET (expected onjuino or m5_echo)"
@@ -39,33 +31,108 @@ esac
 
 TEMPLATE="$PROJECT_DIR/credentials.h.template"
 OUTPUT="$PROJECT_DIR/credentials.h"
-BUILD_DIR="$PROJECT_DIR/build"
 
 # -------------------------------------------------------
-# Ensure dependencies
+# Toolchain runtime: container (default) or native
 # -------------------------------------------------------
-REQUIRED_LIBS=("Adafruit NeoPixel" "esp32_opus")
-for lib in "${REQUIRED_LIBS[@]}"; do
-    if ! arduino-cli lib list 2>/dev/null | grep -q "$lib"; then
-        echo "Installing missing library: $lib"
-        arduino-cli lib install "$lib"
+FLASH_RUNTIME="${FLASH_RUNTIME:-container}"
+FLASH_IMAGE="${FLASH_IMAGE:-onju-flasher}"
+FLASH_DRYRUN="${FLASH_DRYRUN:-0}"
+
+ensure_image() {
+    [ "$FLASH_RUNTIME" = "container" ] || return 0
+    if ! podman ${PODMAN_CONNECTION:+--connection "$PODMAN_CONNECTION"} \
+            image exists "$FLASH_IMAGE" 2>/dev/null; then
+        echo "Building $FLASH_IMAGE (first run)..."
+        podman ${PODMAN_CONNECTION:+--connection "$PODMAN_CONNECTION"} \
+            build -t "$FLASH_IMAGE" "$REPO/docker/flash"
     fi
-done
+}
+
+# Sets DEVICE_ARGS and CONTAINER_PORT for upload/monitor. $1 = explicit port or "".
+detect_device() {
+    local explicit="$1" dev=""
+    if [ -n "$explicit" ]; then
+        dev="$explicit"
+    elif [ -n "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_OS" = "darwin" ]; then
+        # Flasher machine (QEMU): USB is passed through into the VM, not the macOS host.
+        # Detect from inside the machine; host /dev/cu.* paths are wrong here.
+        dev=$(podman machine ssh "$PODMAN_CONNECTION" \
+            'for g in /dev/serial/by-id/* /dev/ttyUSB* /dev/ttyACM*; do [ -e "$g" ] && echo "$g" && break; done' \
+            2>/dev/null | head -1 || true)
+        if [ -z "$dev" ]; then
+            echo "ERROR: no serial device found in flasher machine '$PODMAN_CONNECTION'."
+            echo "       Ensure M5 is plugged in and USB pass-through is active, then retry."
+            echo "       Or pass the port explicitly: PODMAN_CONNECTION=$PODMAN_CONNECTION ./flash.sh $TARGET /dev/ttyUSB0"
+            exit 1
+        fi
+    elif [ "$FLASH_OS" = "darwin" ]; then
+        for g in /dev/cu.usbserial-* /dev/cu.usbmodem*; do
+            [ -e "$g" ] && { dev="$g"; break; }
+        done
+    else
+        for g in /dev/serial/by-id/* /dev/ttyUSB* /dev/ttyACM*; do
+            [ -e "$g" ] && { dev="$g"; break; }
+        done
+    fi
+    [ -n "$dev" ] || { echo "ERROR: no serial device found (pass one explicitly, e.g. /dev/ttyUSB0)"; exit 1; }
+    CONTAINER_PORT="$dev"
+    if [ "$FLASH_RUNTIME" = "container" ]; then
+        DEVICE_ARGS="--device ${dev}:${dev} --group-add keep-groups"
+    else
+        DEVICE_ARGS=""
+    fi
+    echo "Using device: $dev"
+}
+
+# run_toolchain <action> [container_port]
+# Container port is the device path AS SEEN IN THE CONTAINER (set by Task 4).
+run_toolchain() {
+    local action="$1" cport="${2:-}"
+    if [ "$FLASH_RUNTIME" = "native" ]; then
+        FLASH_WORKDIR="$REPO" "$REPO/docker/flash/entrypoint.sh" "$TARGET" "$action" "$cport"
+        return
+    fi
+    local tty=""; [ -t 0 ] && tty="-it"
+    # DEVICE_ARGS is populated by Task 4 for upload/monitor; empty for compile.
+    local cmd=(podman)
+    [ -n "${PODMAN_CONNECTION:-}" ] && cmd+=(--connection "$PODMAN_CONNECTION")
+    # ${DEVICE_ARGS:-} is intentionally word-split (unquoted) so it can expand to
+    # multiple podman args. The device-mapping task must keep device paths
+    # space-free (or switch DEVICE_ARGS to an array) to avoid breakage here.
+    cmd+=(run --rm $tty -v "$REPO:/work" ${DEVICE_ARGS:-} "$FLASH_IMAGE" "$TARGET" "$action" "$cport")
+    if [ "$FLASH_DRYRUN" = "1" ]; then
+        printf '%s ' "${cmd[@]}"; printf '\n'
+        return 0
+    fi
+    "${cmd[@]}"
+}
+
+# -------------------------------------------------------
+# Ensure dependencies (native mode only; container carries its own toolchain)
+# -------------------------------------------------------
+if [ "$FLASH_RUNTIME" = "native" ]; then
+    REQUIRED_LIBS=("Adafruit NeoPixel" "esp32_opus")
+    for lib in "${REQUIRED_LIBS[@]}"; do
+        if ! arduino-cli lib list 2>/dev/null | grep -q "$lib"; then
+            echo "Installing missing library: $lib"
+            arduino-cli lib install "$lib"
+        fi
+    done
+fi
 
 # -------------------------------------------------------
 # Flags
 # -------------------------------------------------------
 COMPILE_ONLY=false
 REGEN=false
-FORCE_COMPILE=false
 NO_MONITOR=false
 PORT=""
 
 for arg in "$@"; do
     case "$arg" in
         compile|compile-only) COMPILE_ONLY=true ;;
-        --regen) REGEN=true; FORCE_COMPILE=true ;;
-        --force) FORCE_COMPILE=true ;;
+        --regen) REGEN=true ;;
         --no-monitor) NO_MONITOR=true ;;
         -h|--help)
             echo "Usage: flash.sh [target] [options] [port]"
@@ -75,7 +142,6 @@ for arg in "$@"; do
             echo "Options:"
             echo "  compile          Compile only, no upload"
             echo "  --regen          Force regenerate WiFi credentials"
-            echo "  --force          Force recompile even if unchanged"
             echo "  --no-monitor     Skip serial monitor after flash"
             echo "  /dev/...         Upload to specific port"
             exit 0 ;;
@@ -89,55 +155,68 @@ echo "Target: $TARGET"
 # -------------------------------------------------------
 # Generate credentials.h (only if missing or --regen)
 # -------------------------------------------------------
+if [ "${FLASH_SKIP_CREDS:-0}" != "1" ]; then
 if [ -f "$OUTPUT" ] && [ "$REGEN" = false ]; then
     echo "Using existing credentials.h (pass --regen to regenerate)"
 else
-    WIFI_SSID=""
+    WIFI_SSID="${WIFI_SSID:-}"
+    WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 
-    WIFI_IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
-    WIFI_IF="${WIFI_IF:-en0}"
+    if [ "$FLASH_OS" = "darwin" ]; then
+        # ---- macOS Keychain + networksetup discovery ----
+        WIFI_IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
+        WIFI_IF="${WIFI_IF:-en0}"
 
-    WIFI_SSID=$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
-    if [ -z "$WIFI_SSID" ] || [[ "$WIFI_SSID" == *"not associated"* ]] || [[ "$WIFI_SSID" == *"not a Wi-Fi"* ]] || [[ "$WIFI_SSID" == *"Error"* ]]; then
-        WIFI_SSID=""
-    fi
+        _SSID_RAW=$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
+        if [ -z "$_SSID_RAW" ] || [[ "$_SSID_RAW" == *"not associated"* ]] || [[ "$_SSID_RAW" == *"not a Wi-Fi"* ]] || [[ "$_SSID_RAW" == *"Error"* ]]; then
+            _SSID_RAW=""
+        fi
+        [ -n "$_SSID_RAW" ] && WIFI_SSID="${WIFI_SSID:-$_SSID_RAW}"
 
-    if [ -z "$WIFI_SSID" ]; then
-        PREFERRED=$(networksetup -listpreferredwirelessnetworks "$WIFI_IF" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
-        if [ -n "$PREFERRED" ]; then
-            TOP_SSID=$(echo "$PREFERRED" | head -1)
-            echo "Known WiFi networks:"
-            NETWORK_LIST=$(echo "$PREFERRED" | head -5)
-            echo "$NETWORK_LIST" | cat -n
-            NUM_NETWORKS=$(echo "$NETWORK_LIST" | wc -l | tr -d ' ')
-            echo ""
-            read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
-            if [ -z "$WIFI_SSID" ]; then
-                WIFI_SSID="$TOP_SSID"
-            elif [[ "$WIFI_SSID" =~ ^[0-9]+$ ]] && [ "$WIFI_SSID" -ge 1 ] && [ "$WIFI_SSID" -le "$NUM_NETWORKS" ]; then
-                WIFI_SSID=$(echo "$NETWORK_LIST" | sed -n "${WIFI_SSID}p")
+        if [ -z "$WIFI_SSID" ]; then
+            PREFERRED=$(networksetup -listpreferredwirelessnetworks "$WIFI_IF" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+            if [ -n "$PREFERRED" ]; then
+                TOP_SSID=$(echo "$PREFERRED" | head -1)
+                echo "Known WiFi networks:"
+                NETWORK_LIST=$(echo "$PREFERRED" | head -5)
+                echo "$NETWORK_LIST" | cat -n
+                NUM_NETWORKS=$(echo "$NETWORK_LIST" | wc -l | tr -d ' ')
+                echo ""
+                read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
+                if [ -z "$WIFI_SSID" ]; then
+                    WIFI_SSID="$TOP_SSID"
+                elif [[ "$WIFI_SSID" =~ ^[0-9]+$ ]] && [ "$WIFI_SSID" -ge 1 ] && [ "$WIFI_SSID" -le "$NUM_NETWORKS" ]; then
+                    WIFI_SSID=$(echo "$NETWORK_LIST" | sed -n "${WIFI_SSID}p")
+                fi
+            fi
+        fi
+
+        if [ -z "$WIFI_PASSWORD" ]; then
+            echo "Retrieving WiFi password from Keychain (Touch ID may be required)..."
+            WIFI_PASSWORD=$(security find-generic-password -wa "$WIFI_SSID" 2>/dev/null || true)
+            if [ -z "$WIFI_PASSWORD" ]; then
+                echo "Could not retrieve password for '$WIFI_SSID' from Keychain."
+                read -sp "WiFi password: " WIFI_PASSWORD
+                echo ""
             fi
         fi
     fi
 
-    [ -z "$WIFI_SSID" ] && read -p "WiFi SSID: " WIFI_SSID
-    [ -z "$WIFI_SSID" ] && { echo "ERROR: No WiFi SSID provided."; exit 1; }
-    echo "WiFi SSID: $WIFI_SSID"
-
-    echo "Retrieving WiFi password from Keychain (Touch ID may be required)..."
-    WIFI_PASSWORD=$(security find-generic-password -wa "$WIFI_SSID" 2>/dev/null || true)
-    if [ -z "$WIFI_PASSWORD" ]; then
-        echo "Could not retrieve password for '$WIFI_SSID' from Keychain."
-        read -sp "WiFi password: " WIFI_PASSWORD
-        echo ""
+    # ---- cross-platform fallback / Linux path ----
+    [ -z "$WIFI_SSID" ] && [ -t 0 ] && read -rp "WiFi SSID: " WIFI_SSID
+    [ -z "$WIFI_SSID" ] && { echo "ERROR: No WiFi SSID (set WIFI_SSID)"; exit 1; }
+    if [ -z "$WIFI_PASSWORD" ] && [ -t 0 ]; then
+        read -rsp "WiFi password: " WIFI_PASSWORD; echo ""
     fi
-    [ -z "$WIFI_PASSWORD" ] && { echo "ERROR: No WiFi password provided."; exit 1; }
+    [ -z "$WIFI_PASSWORD" ] && { echo "ERROR: No WiFi password (set WIFI_PASSWORD)"; exit 1; }
 
+    echo "WiFi SSID: $WIFI_SSID"
     sed -e "s|{{WIFI_SSID}}|${WIFI_SSID}|g" \
         -e "s|{{WIFI_PASSWORD}}|${WIFI_PASSWORD}|g" \
         "$TEMPLATE" > "$OUTPUT"
     echo "Generated credentials.h"
 fi
+fi  # FLASH_SKIP_CREDS
 echo ""
 
 # -------------------------------------------------------
@@ -152,81 +231,33 @@ if [ ! -f "$GIT_HASH_FILE" ] || [ "$(cat "$GIT_HASH_FILE")" != "$NEW_CONTENT" ];
 fi
 
 # -------------------------------------------------------
-# Check if compile is needed
+# Ensure image, then dispatch the requested action
 # -------------------------------------------------------
-NEEDS_COMPILE=true
-if [ "$FORCE_COMPILE" = false ] && [ -d "$BUILD_DIR" ]; then
-    BIN=$(find "$BUILD_DIR" -name "*.ino.bin" -maxdepth 1 2>/dev/null | head -1)
-    if [ -n "$BIN" ]; then
-        NEWER=$(find "$PROJECT_DIR" -maxdepth 1 \( -name "*.ino" -o -name "*.h" \) -newer "$BIN" 2>/dev/null | head -1)
-        [ -z "$NEWER" ] && NEEDS_COMPILE=false
-    fi
-fi
-
-# -------------------------------------------------------
-# Compile
-# -------------------------------------------------------
-compile_firmware() {
-    if [ "$NEEDS_COMPILE" = true ]; then
-        echo "Compiling..."
-        cd "$PROJECT_DIR"
-        arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "$INO_NAME" || exit 1
-        echo "Compilation successful!"
-    else
-        echo "No source changes, skipping compile"
-    fi
-}
+[ "$FLASH_DRYRUN" = "1" ] || ensure_image
 
 if [ "$COMPILE_ONLY" = true ]; then
-    echo "Compile-only mode (no upload)"
-    compile_firmware
+    echo "Compile-only mode"
+    run_toolchain compile
     exit 0
 fi
 
-compile_firmware
-
-# -------------------------------------------------------
-# Detect port
-# -------------------------------------------------------
-if [ -z "$PORT" ]; then
-    for glob in "${PORT_GLOBS[@]}"; do
-        PORT=$(ls $glob 2>/dev/null | head -n 1 || true)
-        [ -n "$PORT" ] && break
-    done
-    if [ -z "$PORT" ]; then
-        echo "Error: No USB serial port found"
-        exit 1
-    fi
-    echo "Auto-detected port: $PORT"
+if [ "$FLASH_OS" = "darwin" ] && [ -z "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_RUNTIME" = "container" ] && [ "$FLASH_DRYRUN" != "1" ]; then
+    echo "ERROR: container upload on macOS requires the QEMU flasher machine."
+    echo "       See docker/flash/README.md (macOS upload appendix)."
+    echo "       To upload natively: FLASH_RUNTIME=native ./flash.sh $TARGET"
+    echo "       To use the flasher machine: PODMAN_CONNECTION=flasher ./flash.sh $TARGET"
+    exit 1
 fi
 
+DEVICE_ARGS=""
+CONTAINER_PORT=""
+detect_device "$PORT"
+
 echo ""
-echo "Flashing $TARGET to $PORT..."
+echo "Flashing $TARGET..."
+run_toolchain flash "$CONTAINER_PORT"
 
-pkill -f "serial_monitor" 2>/dev/null || true
-pkill -f "python.*serial" 2>/dev/null || true
-sleep 1
-
-echo "Uploading..."
-cd "$PROJECT_DIR"
-arduino-cli upload --fqbn "$FQBN" --port "$PORT" --input-dir "$BUILD_DIR" "$INO_NAME"
-
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "Upload successful!"
-    if [ "$NO_MONITOR" = true ]; then
-        exit 0
-    fi
+if [ "$NO_MONITOR" != true ]; then
     echo "Starting serial monitor..."
-    sleep 2
-    if [ -f "$REPO/serial_monitor.py" ]; then
-        python3 "$REPO/serial_monitor.py" "$PORT"
-    else
-        arduino-cli monitor -p "$PORT" -c baudrate=115200
-    fi
-else
-    echo ""
-    echo "Upload failed"
-    echo "Try: hold BOOT button, press RESET, release BOOT, then run again"
-    exit 1
+    run_toolchain monitor "$CONTAINER_PORT"
 fi

@@ -1,0 +1,40 @@
+# onju-gateway — voice pipeline gateway container
+#
+# Requires --network host: multicast group join (239.0.0.1:12345),
+# UDP port 3000 (M5 mic audio), and TCP 3001+3002 (M5 dial-back + control)
+# don't work through rootless pasta/slirp NAT.
+#
+# Run:
+#   podman run -d --name onju-gateway --restart unless-stopped \
+#     --network host \
+#     -v ~/dev/onju-v2/pipeline/config.yaml:/app/pipeline/config.yaml:ro \
+#     -v ~/dev/onju-v2/.env:/app/.env:ro \
+#     [-e EXTRA_VAR=...] \
+#     [--device m5-echo-XXXXXX=IP:ptt] \
+#     onju-gateway
+
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libopus0 \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin uv via the official image — avoids curl|sh and floats the version
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Install locked deps first — layer is stable across source-only changes.
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements.txt
+
+# Copy source after deps so code edits don't bust the dependency layer.
+COPY pipeline/ ./pipeline/
+RUN uv pip install --system --no-cache --no-deps -e .
+
+# config.yaml and .env are bind-mounted at runtime — not baked into the image
+ENTRYPOINT ["python", "-m", "pipeline.main"]

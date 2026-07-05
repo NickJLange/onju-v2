@@ -40,14 +40,14 @@ async def decide_stall(
     None if the query is conversational and needs no stall (or the classifier
     failed/timed out).
 
-    Only runs in agentic mode — conversational backends already respond
+    Only runs for the hermes backend — conversational backends already respond
     quickly and don't benefit from a stall.
 
     Pass the previous user/assistant exchange as context so the classifier
     can recognize follow-ups, continuation cues ("go on"), and mid-conversation
     prefaces ("one more thing") as conversational rather than tool-needing."""
     conv_cfg = config.get("conversation", {})
-    if conv_cfg.get("backend") != "agentic":
+    if conv_cfg.get("backend") != "hermes":
         return None
 
     cfg = conv_cfg.get("stall")

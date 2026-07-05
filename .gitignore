@@ -17,6 +17,7 @@ build/
 .LSOverride
 
 # Secrets & local config
+.env
 pipeline/config.yaml
 m5_echo/credentials.h
 m5_echo/git_hash.h
@@ -25,6 +26,7 @@ m5_echo/git_hash.h
 data/
 logs/
 *.wav
+tests/bench_clips/*.wav  # TTS-generated fixtures; commit only references.txt
 !data/.gitkeep
 
 # Claude
