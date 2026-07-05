@@ -60,9 +60,10 @@ ASR_HOST=192.168.100.23 ASR_MODEL=mlx-community/parakeet-tdt-1.1b-v2 \
 plist with **absolute paths** (launchd does not expand `~`), then bootstraps it
 into the `gui/<uid>` LaunchAgent domain.
 
-`KeepAlive: true` means launchd restarts the process on crash. To stop it temporarily, run `onju-asr stop` (`launchctl stop` — the service stays registered
-so `start` can resume it). `KeepAlive` will restart a crashed process but not a cleanly
-stopped one. To remove it entirely, use `onju-asr uninstall`.
+`KeepAlive: {SuccessfulExit: false}` means launchd restarts the process on crash (non-zero
+exit) but not after a clean stop. `onju-asr stop` sends SIGTERM; Python exits 0, so launchd
+does not relaunch it — the service stays registered and `start` resumes it. To remove it
+entirely, use `onju-asr uninstall`.
 
 `DYLD_FALLBACK_LIBRARY_PATH` is set explicitly in the plist `EnvironmentVariables`
 because launchd does not inherit your shell's environment. The startup log prints

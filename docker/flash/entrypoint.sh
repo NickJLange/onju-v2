@@ -9,6 +9,11 @@ ACTION="${2:-flash}"     # compile | upload | flash (compile+upload) | monitor
 PORT="${3:-}"
 WORKDIR="${FLASH_WORKDIR:-/work}"
 
+if [ ! -d "$WORKDIR" ]; then
+    echo "entrypoint: WORKDIR '$WORKDIR' does not exist (set FLASH_WORKDIR for native mode)" >&2
+    exit 2
+fi
+
 case "$TARGET" in
     onjuino)
         FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200"

@@ -241,7 +241,7 @@ if [ "$COMPILE_ONLY" = true ]; then
     exit 0
 fi
 
-if [ "$FLASH_OS" = "darwin" ] && [ -z "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_RUNTIME" = "container" ]; then
+if [ "$FLASH_OS" = "darwin" ] && [ -z "${PODMAN_CONNECTION:-}" ] && [ "$FLASH_RUNTIME" = "container" ] && [ "$FLASH_DRYRUN" != "1" ]; then
     echo "ERROR: container upload on macOS requires the QEMU flasher machine."
     echo "       See docker/flash/README.md (macOS upload appendix)."
     echo "       To upload natively: FLASH_RUNTIME=native ./flash.sh $TARGET"

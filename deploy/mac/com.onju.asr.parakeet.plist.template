@@ -30,11 +30,15 @@
     <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 
-  <!-- Auto-start at login; restart on crash -->
+  <!-- Restart on crash only (non-zero exit). Clean launchctl stop (SIGTERM → exit 0)
+       is not relaunched, so "onju-asr stop" durably halts the service. -->
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
 
   <!-- Log stdout+stderr to the same file for easy tailing -->
   <key>StandardOutPath</key>

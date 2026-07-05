@@ -12,6 +12,7 @@ Install dependencies:
 import hashlib
 import logging
 import os
+import secrets
 import shutil
 import tempfile
 import time
@@ -101,20 +102,21 @@ async def transcribe(audio: UploadFile = File(...)):
         os.unlink(tmp_path)
         raise
 
-    text = result.text.strip()
-    duration_s = result.sentences[-1].end if result.sentences else 0.0
+    try:
+        text = result.text.strip()
+        duration_s = result.sentences[-1].end if result.sentences else 0.0
 
-    if CAPTURE_DIR and text:
-        os.makedirs(CAPTURE_DIR, exist_ok=True)
-        slug = f"{int(time.time() * 1000)}_{hashlib.md5(text.encode()).hexdigest()[:4]}"
-        dst = os.path.join(CAPTURE_DIR, f"clip_{slug}.wav")
-        shutil.copy(tmp_path, dst)
-        refs = os.path.join(CAPTURE_DIR, "references.txt")
-        with open(refs, "a") as rf:
-            rf.write(f"clip_{slug}.wav {text}\n")
-        logger.info("Captured clip: %s -> %s", dst, text)
-
-    os.unlink(tmp_path)
+        if CAPTURE_DIR and text:
+            os.makedirs(CAPTURE_DIR, exist_ok=True)
+            slug = f"{int(time.time() * 1000)}_{hashlib.md5(text.encode()).hexdigest()[:4]}_{secrets.token_hex(3)}"
+            dst = os.path.join(CAPTURE_DIR, f"clip_{slug}.wav")
+            shutil.copy(tmp_path, dst)
+            refs = os.path.join(CAPTURE_DIR, "references.txt")
+            with open(refs, "a") as rf:
+                rf.write(f"clip_{slug}.wav {text}\n")
+            logger.info("Captured clip: %s -> %s", dst, text)
+    finally:
+        os.unlink(tmp_path)
 
     return {
         "text": text,

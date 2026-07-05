@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "base.en")
 MODEL_DIR = os.environ.get("WHISPER_MODEL_DIR", "/models")
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en") or None  # None = auto-detect
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +95,7 @@ async def transcribe(audio: UploadFile = File(...)):
 
     try:
         tic = time.time()
-        segments, info = _model.transcribe(tmp_path, beam_size=5, language="en")
+        segments, info = _model.transcribe(tmp_path, beam_size=5, language=LANGUAGE)
         # faster-whisper returns a generator — consume it to get all segments
         segments = list(segments)
         elapsed = time.time() - tic
